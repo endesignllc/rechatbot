@@ -1,0 +1,88 @@
+{
+    "name": "factory/chicago-loft-search",
+    "description": "A secure WordPress plugin that allows site users to access ChatGPT-powered search/filter for Chicago loft listings",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Factory AI",
+            "email": "info@factory.ai",
+            "homepage": "https://factory.ai"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=7.4",
+        "composer/installers": "^2.0",
+        "ext-json": "*",
+        "ext-curl": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.0",
+        "squizlabs/php_codesniffer": "^3.7",
+        "wp-coding-standards/wpcs": "^2.3",
+        "dealerdirect/phpcodesniffer-composer-installer": "^0.7",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "yoast/phpunit-polyfills": "^1.0",
+        "phpstan/phpstan": "^1.8",
+        "szepeviktor/phpstan-wordpress": "^1.1",
+        "mockery/mockery": "^1.5",
+        "brain/monkey": "^2.6"
+    },
+    "config": {
+        "allow-plugins": {
+            "composer/installers": true,
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        },
+        "optimize-autoloader": true,
+        "sort-packages": true
+    },
+    "autoload": {
+        "psr-4": {
+            "ChicagoLoftSearch\\": "includes/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ChicagoLoftSearch\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test:coverage": "phpunit --coverage-html coverage",
+        "phpcs": "phpcs --standard=WordPress",
+        "phpcbf": "phpcbf --standard=WordPress",
+        "phpstan": "phpstan analyse",
+        "lint": [
+            "@phpcs",
+            "@phpstan"
+        ],
+        "fix": "@phpcbf",
+        "build": [
+            "@composer install --no-dev --optimize-autoloader",
+            "rm -rf vendor/bin"
+        ],
+        "zip": [
+            "@build",
+            "cd .. && zip -r chicago-loft-search.zip chicago-loft-search-plugin -x \"*.git*\" -x \"*node_modules*\" -x \"*tests*\" -x \"*coverage*\""
+        ]
+    },
+    "scripts-descriptions": {
+        "test": "Run PHPUnit tests",
+        "test:coverage": "Run PHPUnit tests with coverage report",
+        "phpcs": "Check code against WordPress coding standards",
+        "phpcbf": "Fix code to match WordPress coding standards",
+        "phpstan": "Run static analysis",
+        "lint": "Run all linting tools",
+        "fix": "Fix code style issues",
+        "build": "Prepare for production (no dev dependencies)",
+        "zip": "Create distributable zip file"
+    },
+    "extra": {
+        "wordpress-install-dir": "vendor/wordpress/wordpress",
+        "installer-paths": {
+            "vendor/wordpress/wordpress/wp-content/plugins/{$name}/": ["type:wordpress-plugin"],
+            "vendor/wordpress/wordpress/wp-content/themes/{$name}/": ["type:wordpress-theme"]
+        }
+    }
+}

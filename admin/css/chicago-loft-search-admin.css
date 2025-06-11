@@ -1,0 +1,357 @@
+/**
+ * Chicago Loft Search - Admin Styles
+ *
+ * @package Chicago_Loft_Search
+ */
+
+/* General Admin Styles */
+.chicago-loft-search-settings {
+    max-width: 1200px;
+    margin: 20px 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+
+.chicago-loft-search-header-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    color: #666;
+    font-size: 13px;
+    background: #f9f9f9;
+    padding: 10px 15px;
+    border-radius: 4px;
+    border-left: 4px solid #4a90e2;
+}
+
+/* Tab Navigation */
+.chicago-loft-search-tab-content {
+    display: none;
+    padding: 20px;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-top: none;
+    margin-bottom: 20px;
+}
+
+.chicago-loft-search-tab-content.active {
+    display: block;
+}
+
+.chicago-loft-search-tabs .nav-tab {
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.chicago-loft-search-tabs .nav-tab:hover {
+    background-color: #f0f7ff;
+    color: #4a90e2;
+}
+
+.chicago-loft-search-tabs .nav-tab-active::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background-color: #4a90e2;
+}
+
+/* Form Elements */
+.chicago-loft-search-settings input[type="text"],
+.chicago-loft-search-settings input[type="password"],
+.chicago-loft-search-settings input[type="number"],
+.chicago-loft-search-settings textarea,
+.chicago-loft-search-settings select {
+    border-color: #ddd;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.07);
+    transition: border-color 0.15s ease-in-out;
+}
+
+.chicago-loft-search-settings input[type="text"]:focus,
+.chicago-loft-search-settings input[type="password"]:focus,
+.chicago-loft-search-settings input[type="number"]:focus,
+.chicago-loft-search-settings textarea:focus,
+.chicago-loft-search-settings select:focus {
+    border-color: #4a90e2;
+    box-shadow: 0 0 0 1px #4a90e2;
+}
+
+.chicago-loft-search-settings .form-table th {
+    width: 200px;
+    padding: 20px 10px 20px 0;
+    vertical-align: top;
+}
+
+.chicago-loft-search-settings .form-table td {
+    padding: 15px 10px;
+}
+
+.chicago-loft-search-settings .description {
+    font-style: italic;
+    color: #666;
+    margin-top: 5px;
+}
+
+/* Toggle Password Button */
+.toggle-password {
+    margin-left: 5px;
+    vertical-align: middle;
+}
+
+/* API Key Status */
+.api-key-status {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+}
+
+.api-key-status-message {
+    margin-left: 10px;
+}
+
+.api-key-status-message .success {
+    color: #46b450;
+    font-weight: bold;
+}
+
+.api-key-status-message .error {
+    color: #dc3232;
+    font-weight: bold;
+}
+
+.api-key-status-message .verifying {
+    color: #ffb900;
+    font-weight: bold;
+}
+
+/* Security Level Description List */
+.security-level-description {
+    margin-top: 10px;
+    margin-left: 20px;
+    list-style-type: disc;
+}
+
+.security-level-description li {
+    margin-bottom: 5px;
+}
+
+/* Import/Export Container */
+.import-export-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 40px;
+    margin-bottom: 30px;
+}
+
+.export-settings, .import-settings {
+    flex: 1;
+    min-width: 300px;
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 4px;
+    border: 1px solid #e5e5e5;
+}
+
+.import-result, .sync-status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.success {
+    background-color: #f0fff0;
+    border-left: 4px solid #46b450;
+    color: #46b450;
+    font-weight: bold;
+}
+
+.error {
+    background-color: #fff0f0;
+    border-left: 4px solid #dc3232;
+    color: #dc3232;
+    font-weight: bold;
+}
+
+.verifying, .syncing {
+    background-color: #fffcf0;
+    border-left: 4px solid #ffb900;
+    color: #ffb900;
+    font-weight: bold;
+}
+
+/* Manual Sync Container */
+.manual-sync-container {
+    margin-top: 30px;
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 4px;
+    border: 1px solid #e5e5e5;
+}
+
+/* File Input */
+#import-settings-file {
+    margin-bottom: 10px;
+    display: block;
+    width: 100%;
+    padding: 10px;
+    border: 1px dashed #ccc;
+    background: #fff;
+}
+
+/* Temperature Slider */
+.temperature-value {
+    display: inline-block;
+    margin-left: 10px;
+    font-weight: bold;
+    min-width: 30px;
+    text-align: center;
+}
+
+input[type="range"] {
+    vertical-align: middle;
+    width: 200px;
+}
+
+/* API Usage Stats */
+.api-usage-stats {
+    margin-top: 30px;
+}
+
+.api-usage-data {
+    background: #f9f9f9;
+    padding: 15px;
+    border: 1px solid #e5e5e5;
+    border-radius: 4px;
+}
+
+.api-usage-loading {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+}
+
+.api-usage-results table {
+    margin-top: 10px;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.api-usage-results table th,
+.api-usage-results table td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.api-usage-results table th {
+    background-color: #f0f0f0;
+    font-weight: 600;
+}
+
+/* Horizontal Rule */
+hr {
+    margin: 30px 0;
+    border: none;
+    border-top: 1px solid #ddd;
+}
+
+/* Section Headers */
+.chicago-loft-search-settings h2 {
+    font-size: 1.5em;
+    margin: 1em 0;
+    padding-bottom: 0.5em;
+    border-bottom: 1px solid #eee;
+    color: #23282d;
+}
+
+.chicago-loft-search-settings h3 {
+    font-size: 1.3em;
+    margin: 1.5em 0 1em;
+    color: #23282d;
+}
+
+/* Submit Button Row */
+.chicago-loft-search-settings p.submit {
+    padding-top: 20px;
+    margin-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+/* Responsive Styles */
+@media screen and (max-width: 782px) {
+    .chicago-loft-search-settings .form-table th {
+        width: 100%;
+        display: block;
+        padding-bottom: 0;
+    }
+    
+    .chicago-loft-search-settings .form-table td {
+        width: 100%;
+        display: block;
+        padding-top: 0.5em;
+    }
+    
+    .chicago-loft-search-header-info {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .import-export-container {
+        flex-direction: column;
+        gap: 20px;
+    }
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.chicago-loft-search-tab-content.active {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    body.admin-color-modern .chicago-loft-search-tab-content,
+    body.admin-color-dark .chicago-loft-search-tab-content {
+        background: #32373c;
+        border-color: #191f25;
+    }
+    
+    body.admin-color-modern .chicago-loft-search-header-info,
+    body.admin-color-dark .chicago-loft-search-header-info {
+        background: #23282d;
+        border-left-color: #4a90e2;
+        color: #bbc8d4;
+    }
+    
+    body.admin-color-modern .api-usage-data,
+    body.admin-color-dark .api-usage-data,
+    body.admin-color-modern .export-settings,
+    body.admin-color-dark .export-settings,
+    body.admin-color-modern .import-settings,
+    body.admin-color-dark .import-settings,
+    body.admin-color-modern .manual-sync-container,
+    body.admin-color-dark .manual-sync-container {
+        background: #23282d;
+        border-color: #191f25;
+    }
+    
+    body.admin-color-modern .api-usage-results table th,
+    body.admin-color-dark .api-usage-results table th {
+        background-color: #191f25;
+    }
+    
+    body.admin-color-modern .api-usage-results table td,
+    body.admin-color-dark .api-usage-results table td {
+        border-bottom-color: #32373c;
+    }
+    
+    body.admin-color-modern hr,
+    body.admin-color-dark hr {
+        border-top-color: #32373c;
+    }
+}

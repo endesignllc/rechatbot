@@ -1,0 +1,78 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Editor files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.komodoproject
+.komodotools/
+*.tmproj
+*.tmproject
+tmtags
+nbproject/
+*.swp
+*.swo
+*~
+
+# WordPress specific files
+wp-config.php
+wp-content/advanced-cache.php
+wp-content/backup-db/
+wp-content/backups/
+wp-content/blogs.dir/
+wp-content/cache/
+wp-content/upgrade/
+wp-content/uploads/
+wp-content/wp-cache-config.php
+wp-content/plugins/hello.php
+
+# Plugin specific files
+/vendor/
+/node_modules/
+/bower_components/
+
+# Build files
+/build/
+/dist/
+/release/
+
+# Composer
+composer.phar
+/vendor/
+
+# NPM/Yarn
+/node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.yarn-integrity
+
+# Unit tests / coverage reports
+/coverage/
+/phpunit.xml
+.phpunit.result.cache
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+.htaccess
+
+# Zip files (often used for plugin distribution)
+*.zip
+
+# Environment files
+.env
+.env.*
+!.env.example

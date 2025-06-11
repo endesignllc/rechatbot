@@ -1,0 +1,306 @@
+/**
+ * Chicago Loft Search - Public Styles
+ *
+ * Minimal complementary styles for the Chicago Loft Search plugin frontend.
+ * These styles extend the inline styles defined in the search interface template.
+ *
+ * @package Chicago_Loft_Search
+ */
+
+/* Global Resets & Integration with WordPress Themes */
+.chicago-loft-search-container * {
+    box-sizing: border-box;
+}
+
+.entry-content .chicago-loft-search-container,
+.site-content .chicago-loft-search-container,
+.post-content .chicago-loft-search-container {
+    margin-bottom: 40px;
+}
+
+/* Print Styles */
+@media print {
+    .chicago-loft-search-form-container,
+    .chicago-loft-search-examples,
+    .chicago-loft-search-history {
+        display: none !important;
+    }
+    
+    .chicago-loft-search-results {
+        box-shadow: none !important;
+        border: 1px solid #ddd !important;
+    }
+    
+    .chicago-loft-search-results-container {
+        page-break-inside: avoid;
+    }
+    
+    .chicago-loft-search-container {
+        max-width: 100% !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+    }
+}
+
+/* Additional Animations */
+@keyframes pulseHighlight {
+    0% { background-color: rgba(74, 144, 226, 0); }
+    50% { background-color: rgba(74, 144, 226, 0.1); }
+    100% { background-color: rgba(74, 144, 226, 0); }
+}
+
+.chicago-loft-link:focus {
+    animation: pulseHighlight 1.5s ease-in-out;
+    outline: none;
+}
+
+/* Enhanced Accessibility */
+.chicago-loft-search-button:focus-visible,
+.example-question:focus-visible,
+.chicago-loft-link:focus-visible,
+.clear-history-button:focus-visible {
+    outline: 2px solid #4a90e2;
+    outline-offset: 2px;
+}
+
+.chicago-loft-search-container input:focus-visible {
+    outline: 2px solid #4a90e2;
+    outline-offset: 0;
+}
+
+/* Skip to Results Link (Accessibility) */
+.chicago-loft-search-skip-link {
+    position: absolute;
+    left: -9999px;
+    top: auto;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.chicago-loft-search-skip-link:focus {
+    position: relative;
+    left: 0;
+    width: auto;
+    height: auto;
+    display: block;
+    padding: 10px 15px;
+    background: #4a90e2;
+    color: white;
+    text-align: center;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: bold;
+    z-index: 100;
+}
+
+/* RTL Language Support */
+.rtl .chicago-loft-search-container {
+    direction: rtl;
+    text-align: right;
+}
+
+.rtl .chicago-loft-search-input {
+    border-radius: 0 6px 6px 0;
+}
+
+.rtl .chicago-loft-search-button {
+    border-radius: 6px 0 0 6px;
+}
+
+.rtl .button-text {
+    margin-right: 0;
+    margin-left: 8px;
+}
+
+.rtl .error-icon {
+    margin-right: 0;
+    margin-left: 15px;
+}
+
+/* Tooltip Styles */
+.chicago-loft-tooltip {
+    position: relative;
+    display: inline-block;
+    border-bottom: 1px dotted #666;
+    cursor: help;
+}
+
+.chicago-loft-tooltip .tooltip-text {
+    visibility: hidden;
+    width: 200px;
+    background-color: #333;
+    color: #fff;
+    text-align: center;
+    border-radius: 4px;
+    padding: 8px;
+    position: absolute;
+    z-index: 1;
+    bottom: 125%;
+    left: 50%;
+    margin-left: -100px;
+    opacity: 0;
+    transition: opacity 0.3s;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.chicago-loft-tooltip .tooltip-text::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: #333 transparent transparent transparent;
+}
+
+.chicago-loft-tooltip:hover .tooltip-text,
+.chicago-loft-tooltip:focus .tooltip-text {
+    visibility: visible;
+    opacity: 1;
+}
+
+/* Pagination for Results */
+.chicago-loft-search-pagination {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #e1e1e1;
+}
+
+.chicago-loft-search-pagination .page-numbers {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    margin: 0 4px;
+    font-size: 14px;
+    text-decoration: none;
+    background-color: #f9f9f9;
+    border: 1px solid #e1e1e1;
+    border-radius: 4px;
+    color: #333;
+    transition: all 0.2s ease;
+}
+
+.chicago-loft-search-pagination .page-numbers.current {
+    background-color: #4a90e2;
+    border-color: #4a90e2;
+    color: white;
+}
+
+.chicago-loft-search-pagination .page-numbers:hover:not(.current) {
+    background-color: #e9e9e9;
+    border-color: #d1d1d1;
+}
+
+/* Modal Dialog for Loft Details */
+.chicago-loft-modal {
+    display: none;
+    position: fixed;
+    z-index: 9999;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.7);
+}
+
+.chicago-loft-modal-content {
+    position: relative;
+    background-color: #fff;
+    margin: 5% auto;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    width: 80%;
+    max-width: 900px;
+    max-height: 90vh;
+    overflow-y: auto;
+    animation: modalFadeIn 0.3s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.chicago-loft-modal-close {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    font-size: 24px;
+    font-weight: bold;
+    color: #666;
+    cursor: pointer;
+    transition: color 0.2s;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    text-align: center;
+    border-radius: 50%;
+}
+
+.chicago-loft-modal-close:hover,
+.chicago-loft-modal-close:focus {
+    color: #333;
+    background-color: #f0f0f0;
+    text-decoration: none;
+}
+
+/* Dark Mode Support for Modal */
+@media (prefers-color-scheme: dark) {
+    .chicago-loft-modal-content {
+        background-color: #222;
+        color: #eee;
+    }
+    
+    .chicago-loft-modal-close {
+        color: #aaa;
+    }
+    
+    .chicago-loft-modal-close:hover,
+    .chicago-loft-modal-close:focus {
+        color: #fff;
+        background-color: #333;
+    }
+    
+    .chicago-loft-search-pagination .page-numbers {
+        background-color: #333;
+        border-color: #444;
+        color: #eee;
+    }
+    
+    .chicago-loft-search-pagination .page-numbers:hover:not(.current) {
+        background-color: #444;
+        border-color: #555;
+    }
+    
+    .chicago-loft-search-pagination .page-numbers.current {
+        background-color: #4a90e2;
+        border-color: #4a90e2;
+    }
+}
+
+/* Responsive Adjustments for Very Small Screens */
+@media (max-width: 480px) {
+    .chicago-loft-search-pagination .page-numbers {
+        min-width: 28px;
+        height: 28px;
+        margin: 0 2px;
+        font-size: 12px;
+    }
+    
+    .chicago-loft-modal-content {
+        width: 95%;
+        margin: 10% auto;
+        padding: 15px;
+    }
+}
