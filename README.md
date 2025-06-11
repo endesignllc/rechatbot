@@ -3,7 +3,7 @@ Natural-language search & filtering for Chicago loft listings powered by ChatGPT
 
 ---
 
-## 1  | Plugin Overview & Features
+## 1  |  Plugin Overview & Features
 Chicago Loft Search brings the power of OpenAI’s ChatGPT directly to your WordPress site, allowing visitors to ask questions such as:
 
 * “Show me West Loop lofts under \$500 k with exposed brick.”
@@ -22,7 +22,7 @@ Key capabilities
 
 ---
 
-## 2  | Installation
+## 2  |  Installation
 
 1. **Download** the plugin ZIP or clone the repo:  
    `git clone https://github.com/your-org/chicago-loft-search-plugin.git`
@@ -34,7 +34,7 @@ Key capabilities
 
 ---
 
-## 3  | Quick Configuration Guide
+## 3  |  Quick Configuration Guide
 
 1. Go to **Settings → Chicago Loft Search** (or **Loft Search → Settings**).
 2. Complete the tabs left-to-right:
@@ -49,7 +49,7 @@ Save changes. You’re ready to embed the search interface.
 
 ---
 
-## 4  | OpenAI API Setup
+## 4  |  OpenAI API Setup
 
 | Step | Action |
 |------|--------|
@@ -64,7 +64,7 @@ Token costs are charged by OpenAI, not by this plugin. The usage dashboard shows
 
 ---
 
-## 5  | MLS Data Integration
+## 5  |  MLS Data Integration
 
 There are **two ways** to feed listings:
 
@@ -108,7 +108,7 @@ Enable **Automatic Sync** & pick frequency (hourly → weekly). Last sync timest
 
 ---
 
-## 6  | Security & Best Practices
+## 6  |  Security & Best Practices
 
 | Feature | Description |
 |---------|-------------|
@@ -124,7 +124,7 @@ Enable **Automatic Sync** & pick frequency (hourly → weekly). Last sync timest
 
 ---
 
-## 7  | Usage Examples & Shortcodes
+## 7  |  Usage Examples & Shortcodes
 
 Embed the search anywhere:
 
@@ -149,7 +149,7 @@ Example:
 
 ---
 
-## 8  | Troubleshooting
+## 8  |  Troubleshooting
 
 | Symptom | Resolution |
 |---------|------------|
@@ -160,11 +160,11 @@ Example:
 | reCAPTCHA not loading | Ensure Site Key is correct; domain allowed in Google Console. |
 | Cron jobs not running | Set up a real server-side cron or use WP-Crontrol to diagnose. |
 
-Enable WP_DEBUG for detailed logs or inspect **Loft Search → Logs**.
+Enable `WP_DEBUG` for detailed logs or inspect **Loft Search → Logs**.
 
 ---
 
-## 9  | FAQ
+## 9  |  FAQ
 
 **Q – Does this expose my private MLS data publicly?**  
 A – No. Raw data never leaves your server. Only a trimmed JSON excerpt (max 50 records) is sent to OpenAI per query.
@@ -183,7 +183,7 @@ All strings are internationalised (`__()` / `_e()`). Use Loco Translate or PoEdi
 
 ---
 
-## 10  | Support & Contribution
+## 10  |  Support & Contribution
 
 ### Need Help?  
 1. Check the **Troubleshooting** section & logs.  
