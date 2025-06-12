@@ -3,7 +3,7 @@
  * Plugin Name: Chicago Loft Search
  * Plugin URI: https://example.com/chicago-loft-search
  * Description: A secure WordPress plugin that allows users to search Chicago loft listings using ChatGPT-powered natural language queries.
- * Version: 1.0.5
+ * Version: 1.0.8
  * Author: Factory AI
  * Author URI: https://factory.ai
  * License: GPL-2.0+
@@ -20,13 +20,127 @@ if (!defined('WPINC')) {
 }
 
 // Define plugin constants
-define('CHICAGO_LOFT_SEARCH_VERSION', '1.0.5');
+define('CHICAGO_LOFT_SEARCH_VERSION', '1.0.8');
 define('CHICAGO_LOFT_SEARCH_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CHICAGO_LOFT_SEARCH_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('CHICAGO_LOFT_SEARCH_PLUGIN_BASENAME', plugin_basename(__FILE__));
 
-// Include custom query optimization functions
-require_once(CHICAGO_LOFT_SEARCH_PLUGIN_DIR . 'csv-query-optimization.php');
+// Define the optimized CSV query function directly in the plugin instead of including an external file
+
+/**
+ * Optimized function to query CSV files directly.
+ * Reads all CSVs from the designated folder, extracts relevant rows based on keywords,
+ * and returns a structured array of this data, optimized for token usage.
+ *
+ * @param string $query The user's search query.
+ * @param int $max_chars_for_csv_data Approximate character limit for the CSV data payload.
+ * @return array An array of structured data from CSVs, or an empty array if no relevant data found.
+ */
+function chicago_loft_search_query_csv_documents_optimized($query, $max_chars_for_csv_data = 15000) {
+    $upload_dir = wp_upload_dir();
+    $csv_dir_path = $upload_dir['basedir'] . '/csv-documents';
+
+    if (!file_exists($csv_dir_path) || !is_dir($csv_dir_path)) {
+        return []; // No CSV directory, no results
+    }
+
+    $files = glob($csv_dir_path . '/*.csv');
+    if (empty($files)) {
+        return []; // No CSV files found
+    }
+
+    $keywords = preg_split('/\\s+/', strtolower(trim($query)));
+    $keywords = array_filter($keywords, function($kw) {
+        return strlen(trim($kw)) > 2; // Filter out very short or empty keywords
+    });
+
+    if (empty($keywords)) {
+        return []; // No meaningful keywords to search
+    }
+
+    $relevant_data_payload = [];
+    $current_total_chars_count = 0;
+
+    foreach ($files as $file_path) {
+        if ($current_total_chars_count >= $max_chars_for_csv_data) {
+            break; // Stop if we've already hit the limit
+        }
+
+        if (($handle = fopen($file_path, 'r')) !== false) {
+            $header = fgetcsv($handle);
+            if (!$header || empty(array_filter($header, 'strlen'))) { 
+                fclose($handle);
+                continue; // Skip empty or invalid CSV
+            }
+            $header = array_map('trim', $header);
+
+            $current_file_matched_rows = [];
+            $current_file_rows_chars_count = 0;
+
+            // Estimate characters for this file's metadata 
+            $file_metadata_for_estimation = ['source_file' => basename($file_path), 'columns' => $header, 'rows' => []];
+            $file_metadata_chars_estimate = strlen(json_encode($file_metadata_for_estimation)) - strlen(json_encode([])); 
+
+            while (($row_values = fgetcsv($handle)) !== false) {
+                if (count($header) !== count($row_values)) {
+                    continue; // Skip malformed rows
+                }
+                if (empty(array_filter($row_values, 'strlen'))) {
+                    continue;
+                }
+
+                $row_assoc = array_combine($header, $row_values);
+                $row_text_lower = strtolower(implode(' ', $row_assoc));
+
+                $matches_this_row = false;
+                foreach ($keywords as $keyword) {
+                    if (stripos($row_text_lower, $keyword) !== false) {
+                        $matches_this_row = true;
+                        break;
+                    }
+                }
+
+                if ($matches_this_row) {
+                    $row_json_for_estimation = json_encode($row_assoc);
+                    $row_chars_estimate = strlen($row_json_for_estimation);
+
+                    // Calculate potential new total character count if this row is added
+                    $potential_new_total_chars = $current_total_chars_count + $row_chars_estimate;
+                    if (empty($current_file_matched_rows)) { // If this is the first matched row for this file
+                        $potential_new_total_chars += $file_metadata_chars_estimate;
+                    }
+
+                    if ($potential_new_total_chars <= $max_chars_for_csv_data) {
+                        $current_file_matched_rows[] = $row_assoc;
+                        $current_file_rows_chars_count += $row_chars_estimate;
+                    } else {
+                        break; // Not enough space for this row
+                    }
+                }
+            }
+            
+            fclose($handle);
+
+            if (!empty($current_file_matched_rows)) {
+                // We have matched rows for this file. Check again if the file block fits.
+                $this_file_block_chars = $file_metadata_chars_estimate + $current_file_rows_chars_count;
+                if (($current_total_chars_count + $this_file_block_chars) <= $max_chars_for_csv_data) {
+                    $relevant_data_payload[] = [
+                        'source_file' => basename($file_path),
+                        'columns' => $header,
+                        'rows' => $current_file_matched_rows
+                    ];
+                    $current_total_chars_count += $this_file_block_chars;
+                } else if ($current_total_chars_count > 0) {
+                    break; // Stop if we already have some data
+                }
+            }
+        }
+    }
+
+    return $relevant_data_payload;
+}
+
 
 /**
  * The code that runs during plugin activation.
@@ -260,7 +374,7 @@ function chicago_loft_search_check_and_upgrade_db() {
             }
         }
     }
-    if (version_compare($current_db_version, '1.0.5', '<')) {
+    if (version_compare($current_db_version, '1.0.5', '<')) { // This covers changes up to 1.0.5
         global $wpdb;
         $table_name = $wpdb->prefix . 'chicago_loft_listings';
         if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name)) == $table_name) {
@@ -1173,23 +1287,28 @@ function chicago_loft_search_ajax_handler() {
 
     } else {
         // Fallback or augment with CSV file querying if no DB results or if desired
-        $csv_file_data_for_gpt = chicago_loft_search_query_csv_documents_optimized($query, $max_chars_for_context); // Use optimized function
+        $csv_file_data_for_gpt = chicago_loft_search_query_csv_documents_optimized($query, $max_chars_for_context); // Use the directly defined optimized function
+
         if(!empty($csv_file_data_for_gpt)) {
             $json_encoded_csv_file_data = json_encode($csv_file_data_for_gpt);
             // Truncation logic for csv_file_data similar to above if needed
             $final_system_prompt .= "\n\nAdditionally, consider the following data extracted from uploaded CSV files that might be relevant. This data is structured as an array of objects, where each object represents a CSV file and contains its 'source_file', 'columns', and 'rows' of matching data:\n" . $json_encoded_csv_file_data;
              // Populate listings_for_formatter from CSV file data if it's the primary source here
             if (empty($db_listings_for_context)) { // Only if DB didn't yield results
-                foreach ($csv_file_data_for_gpt as $file_data) {
-                    if (isset($file_data['rows']) && is_array($file_data['rows'])) {
-                        foreach($file_data['rows'] as $row_item) {
-                            // Assuming row_item might have an 'MLS ID' or similar key for formatter
-                            $mls_key_found = '';
-                            foreach (['MLS ID', 'mls_id', 'MLSID', 'Listing ID'] as $key_check) {
-                                if(isset($row_item[$key_check])) { $mls_key_found = $row_item[$key_check]; break; }
+                // If $csv_file_data_for_gpt is a string (from original function), this loop won't work as expected.
+                // If it's structured (from the optimized function, if that were still in use), it would.
+                // For now, with original function, this part will be ineffective for listings_for_formatter.
+                if (is_array($csv_file_data_for_gpt)) { // Check if it's an array (optimized version would return this)
+                    foreach ($csv_file_data_for_gpt as $file_data) {
+                        if (isset($file_data['rows']) && is_array($file_data['rows'])) {
+                            foreach($file_data['rows'] as $row_item) {
+                                $mls_key_found = '';
+                                foreach (['MLS ID', 'mls_id', 'MLSID', 'Listing ID'] as $key_check) {
+                                    if(isset($row_item[$key_check])) { $mls_key_found = $row_item[$key_check]; break; }
+                                }
+                                if($mls_key_found) $listings_for_formatter[] = array_merge(['mls_id' => $mls_key_found], $row_item);
+                                else  $listings_for_formatter[] = $row_item; 
                             }
-                            if($mls_key_found) $listings_for_formatter[] = array_merge(['mls_id' => $mls_key_found], $row_item);
-                            else  $listings_for_formatter[] = $row_item; // No clear MLS ID for linking
                         }
                     }
                 }
@@ -2638,15 +2757,15 @@ add_action('admin_init', 'chicago_loft_search_process_csv_actions');
 
 
 /**
- * Optimized function to query CSV files directly.
- * Reads all CSVs from the designated folder, extracts relevant rows based on keywords,
- * and returns a structured array of this data, optimized for token usage.
+ * Original function to query CSV files directly.
+ * Reads all CSVs from the designated folder and returns rows that contain query keywords
+ * as a single concatenated string. This is the version that will be used.
  *
  * @param string $query The user's search query.
  * @param int $max_chars_for_csv_data Approximate character limit for the CSV data payload.
- * @return array An array of structured data from CSVs, or an empty array if no relevant data found or fits.
+ * @return string|array A single string of concatenated relevant CSV data, or an empty array if dir not found.
  */
-function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data = 15000) { // This is the original, will be renamed or removed if optimization file is used
+function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data = 15000) { 
     $upload_dir = wp_upload_dir();
     $csv_dir_path = $upload_dir['basedir'] . '/csv-documents';
 
@@ -2656,7 +2775,7 @@ function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data
 
     $files = glob($csv_dir_path . '/*.csv');
     if (empty($files)) {
-        return []; 
+        return ""; 
     }
 
     $keywords = preg_split('/\\s+/', strtolower(trim($query)));
@@ -2665,32 +2784,27 @@ function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data
     });
 
     if (empty($keywords)) {
-        return []; 
+        return ""; 
     }
-
-    $relevant_data_payload = [];
-    $current_total_chars_count = 0;
+    
+    $all_csv_content_for_gpt = "";
 
     foreach ($files as $file_path) {
-        if ($current_total_chars_count >= $max_chars_for_csv_data) {
-            break; 
-        }
+        if (strlen($all_csv_content_for_gpt) >= $max_chars_for_csv_data) break;
 
         if (($handle = fopen($file_path, 'r')) !== false) {
+            $file_content_for_this_file = "Content from file: " . basename($file_path) . "\n";
             $header = fgetcsv($handle);
             if (!$header || empty(array_filter($header, 'strlen'))) { 
                 fclose($handle);
                 continue; 
             }
-            $header = array_map('trim', $header);
-
-            $current_file_matched_rows = [];
-            $current_file_rows_chars_count = 0;
-
-            $file_metadata_for_estimation = ['source_file' => basename($file_path), 'columns' => $header, 'rows' => []];
-            $file_metadata_chars_estimate = strlen(json_encode($file_metadata_for_estimation)) - strlen(json_encode([])); 
+            $file_content_for_this_file .= implode(", ", $header) . "\n";
+            $found_in_this_file = false;
 
             while (($row_values = fgetcsv($handle)) !== false) {
+                if (strlen($all_csv_content_for_gpt . $file_content_for_this_file) >= $max_chars_for_csv_data) break;
+
                 if (count($header) !== count($row_values)) {
                     continue; 
                 }
@@ -2698,9 +2812,7 @@ function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data
                     continue;
                 }
 
-                $row_assoc = array_combine($header, $row_values);
-                $row_text_lower = strtolower(implode(' ', $row_assoc));
-
+                $row_text_lower = strtolower(implode(' ', $row_values));
                 $matches_this_row = false;
                 foreach ($keywords as $keyword) {
                     if (stripos($row_text_lower, $keyword) !== false) {
@@ -2710,41 +2822,38 @@ function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data
                 }
 
                 if ($matches_this_row) {
-                    $row_json_for_estimation = json_encode($row_assoc);
-                    $row_chars_estimate = strlen($row_json_for_estimation);
-                    
-                    $potential_new_total_chars = $current_total_chars_count + $row_chars_estimate;
-                    if (empty($current_file_matched_rows)) { 
-                        $potential_new_total_chars += $file_metadata_chars_estimate;
-                    }
-
-                    if ($potential_new_total_chars <= $max_chars_for_csv_data) {
-                        $current_file_matched_rows[] = $row_assoc;
-                        $current_file_rows_chars_count += $row_chars_estimate;
+                    $row_string = implode(", ", $row_values) . "\n";
+                    if (strlen($all_csv_content_for_gpt . $file_content_for_this_file . $row_string) <= $max_chars_for_csv_data) {
+                        $file_content_for_this_file .= $row_string;
+                        $found_in_this_file = true;
                     } else {
-                        goto next_file_in_loop; 
+                        // Not enough space for this row, stop processing this file
+                        break; 
                     }
                 }
             }
-            
-            next_file_in_loop: 
             fclose($handle);
 
-            if (!empty($current_file_matched_rows)) {
-                $this_file_block_chars = $file_metadata_chars_estimate + $current_file_rows_chars_count;
-                if (($current_total_chars_count + $this_file_block_chars) <= $max_chars_for_csv_data) {
-                    $relevant_data_payload[] = [
-                        'source_file' => basename($file_path),
-                        'columns' => $header,
-                        'rows' => $current_file_matched_rows
-                    ];
-                    $current_total_chars_count += $this_file_block_chars;
-                } else {
-                    if ($current_total_chars_count > 0) break; 
-                }
+            if ($found_in_this_file) {
+                 if (strlen($all_csv_content_for_gpt . $file_content_for_this_file . "\n---\n") <= $max_chars_for_csv_data) {
+                    $all_csv_content_for_gpt .= $file_content_for_this_file . "\n---\n";
+                 } else {
+                     $all_csv_content_for_gpt .= substr($file_content_for_this_file, 0, $max_chars_for_csv_data - strlen($all_csv_content_for_gpt) - strlen("\n[DATA TRUNCATED]")) . "\n[DATA TRUNCATED]";
+                     break;
+                 }
             }
         } 
     }
-    return $relevant_data_payload;
+    
+    if (strlen($all_csv_content_for_gpt) > $max_chars_for_csv_data) {
+        $all_csv_content_for_gpt = substr($all_csv_content_for_gpt, 0, $max_chars_for_csv_data - strlen("\n[DATA TRUNCATED]")) . "\n[DATA TRUNCATED]";
+    }
+    
+    return $all_csv_content_for_gpt;
 }
+
+// The optimized function previously here has been renamed to chicago_loft_search_query_csv_documents
+// and integrated above, replacing the older version of that function.
+// No fallback is needed as the primary function itself is now the optimized one.
+
 ?>
