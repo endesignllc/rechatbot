@@ -25,6 +25,9 @@ define('CHICAGO_LOFT_SEARCH_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CHICAGO_LOFT_SEARCH_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('CHICAGO_LOFT_SEARCH_PLUGIN_BASENAME', plugin_basename(__FILE__));
 
+// Include custom query optimization functions
+require_once(CHICAGO_LOFT_SEARCH_PLUGIN_DIR . 'csv-query-optimization.php');
+
 /**
  * The code that runs during plugin activation.
  */
@@ -1170,7 +1173,7 @@ function chicago_loft_search_ajax_handler() {
 
     } else {
         // Fallback or augment with CSV file querying if no DB results or if desired
-        $csv_file_data_for_gpt = chicago_loft_search_query_csv_documents($query, $max_chars_for_context);
+        $csv_file_data_for_gpt = chicago_loft_search_query_csv_documents_optimized($query, $max_chars_for_context); // Use optimized function
         if(!empty($csv_file_data_for_gpt)) {
             $json_encoded_csv_file_data = json_encode($csv_file_data_for_gpt);
             // Truncation logic for csv_file_data similar to above if needed
@@ -2643,7 +2646,7 @@ add_action('admin_init', 'chicago_loft_search_process_csv_actions');
  * @param int $max_chars_for_csv_data Approximate character limit for the CSV data payload.
  * @return array An array of structured data from CSVs, or an empty array if no relevant data found or fits.
  */
-function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data = 15000) {
+function chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_data = 15000) { // This is the original, will be renamed or removed if optimization file is used
     $upload_dir = wp_upload_dir();
     $csv_dir_path = $upload_dir['basedir'] . '/csv-documents';
 
