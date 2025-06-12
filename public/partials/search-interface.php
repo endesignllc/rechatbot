@@ -18,8 +18,9 @@ $show_examples = isset($atts['show_examples']) ? $atts['show_examples'] === 'yes
 
 // Get plugin options
 $options = get_option('chicago_loft_search_options', array());
+// Corrected example questions handling
 $example_questions_setting = isset($options['example_questions']) ? $options['example_questions'] : "Show me lofts in West Loop under $500,000\nWhat are the largest lofts in River North?\nFind 2 bedroom lofts in South Loop with exposed brick";
-$example_questions = array_map('trim', explode("\n", $example_questions_setting));
+$example_questions = array_map('trim', preg_split('/\r\n|\r|\n/', $example_questions_setting));
 $example_questions = array_filter($example_questions); // Remove empty lines
 
 $enable_history = isset($options['enable_search_history']) && $options['enable_search_history'];
@@ -330,7 +331,7 @@ $search_id = 'chicago-loft-search-' . uniqid();
 }
 
 @keyframes spinner-border {
-    to { transform: rotate(360deg); }\
+    to { transform: rotate(360deg); }
 }
 
 .loading-text {
@@ -678,6 +679,33 @@ $search_id = 'chicago-loft-search-' . uniqid();
     .history-query:hover {
         background-color: #2a3a4a;
     }
+}
+
+/* Loft Listing Styles */
+.loft-listings {
+  padding-left: 0;
+  margin-left: 0;
+  list-style: none;
+}
+
+.loft-listing-item {
+  position: relative;
+  padding-left: 28px; /* Space for the icon */
+  margin-bottom: 12px;
+  list-style-type: none; /* Remove default bullet */
+}
+
+.loft-listing-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px; /* Adjust vertical alignment as needed */
+  width: 20px; /* SVG width */
+  height: 20px; /* SVG height */
+  background-image: url("<?php echo esc_url(plugins_url('../images/loft-vector.svg', __FILE__)); ?>");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
 }
 </style>
 
