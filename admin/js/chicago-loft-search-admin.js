@@ -13,6 +13,11 @@
      * Chicago Loft Search Admin Module
      */
     const ChicagoLoftSearchAdmin = {
+        // Store CSV data at a scope accessible by different methods within this module
+        csvHeaders: [],
+        previewDisplayData: [], // For building the preview table: [{ mls_id, original_data_preview: {H1:V1, ...}}, ...]
+        batchImportPayloadTemplate: [], // For building the final import payload: [{ preview_item_for_js:{mls_id}, original_csv_data:{H1:V1,...}, listing_type }, ...]
+
         /**
          * Initialize the admin functionality
          */
@@ -248,25 +253,30 @@
          * Set up CSV import functionality
          */
         setupCSVImport: function() {
-            // Handle file upload for preview
-            $('#csv-upload-form').on('submit', function(e) {
+            // Handle file upload for preview (button ID from import-page.php)
+            $('#process-csv-button').on('click', function(e) {
                 e.preventDefault();
                 
                 const fileInput = $('#mls_csv_file')[0];
                 if (fileInput.files.length === 0) {
                     $('.csv-upload-status').html('<p class="error">Please select a CSV file.</p>');
+                     // Make sure preview section is hidden if no file
+                    $('#preview-section').hide();
+                    $('#progress-section').hide();
                     return;
                 }
                 
-                const $submitButton = $(this).find('button[type="submit"]');
+                const $submitButton = $(this);
                 const originalText = $submitButton.text();
-                $submitButton.prop('disabled', true).text('Uploading...');
+                $submitButton.prop('disabled', true).text('Processing...');
+                $('#preview-section').hide(); // Hide preview while processing new file
                 $('.csv-preview-container').html(''); 
                 $('.csv-upload-status').html(''); 
                 
-                const formData = new FormData(this);
+                const formData = new FormData();
                 formData.append('action', 'chicago_loft_search_parse_csv_preview');
                 formData.append('nonce', chicago_loft_search_admin.csv_import_nonce);
+                formData.append('mls_csv_file', fileInput.files[0]);
                 
                 $.ajax({
                     url: ajaxurl,
@@ -278,97 +288,111 @@
                         $submitButton.prop('disabled', false).text(originalText);
                         
                         if (response.success) {
-                            window.csvRawData = response.data.raw_data_for_import || response.data.raw_data;
-                            window.detectedListingType = response.data.listing_type || 'loft';
+                            ChicagoLoftSearchAdmin.csvHeaders = response.data.headers || [];
+                            ChicagoLoftSearchAdmin.previewDisplayData = response.data.preview_data || [];
+                            ChicagoLoftSearchAdmin.batchImportPayloadTemplate = response.data.raw_data_for_import || [];
                             
-                            const previewData = response.data.preview_data;
-                            if (previewData && previewData.length > 0) {
-                                ChicagoLoftSearchAdmin.buildPreviewTable(previewData);
+                            if (ChicagoLoftSearchAdmin.previewDisplayData.length > 0 && ChicagoLoftSearchAdmin.csvHeaders.length > 0) {
+                                ChicagoLoftSearchAdmin.buildPreviewTable(ChicagoLoftSearchAdmin.csvHeaders, ChicagoLoftSearchAdmin.previewDisplayData);
                                 $('.csv-upload-status').html('<p class="success notice notice-success is-dismissible">CSV preview loaded. Review the data and click "Confirm and Start Import".</p>');
+                                $('#upload-section').slideUp();
+                                $('#preview-section').slideDown(); // Show preview section
                             } else {
-                                $('.csv-preview-container').html('<p class="error notice notice-error">No preview data available. The CSV might be empty or incorrectly formatted.</p>');
+                                $('.csv-preview-container').html('<p class="error notice notice-error">No data or headers found in CSV to preview.</p>');
+                                $('#preview-section').hide(); // Keep it hidden
                             }
                         } else {
                             $('.csv-preview-container').html('<p class="error notice notice-error">' + (response.data.message || 'Error parsing CSV.') + '</p>');
+                            $('#preview-section').show(); // Show section to display error
                         }
                     },
                     error: function(xhr) {
                         $submitButton.prop('disabled', false).text(originalText);
                         $('.csv-preview-container').html('<p class="error notice notice-error">Error processing CSV file. Server said: ' + (xhr.responseText || 'Unknown error') +'</p>');
+                        $('#preview-section').show(); // Show section to display error
+                    },
+                    complete: function() {
+                         // Ensure process button is re-enabled
+                        $('#process-csv-button').prop('disabled', false).text('Preview CSV Data');
                     }
                 });
             });
             
-            // Handle import button click (now with batching)
-            // Ensuring this selector matches the button ID in import-page.php
-            $(document).on('click', '#confirm-import-btn', function(e) { 
+            // Handle import button click
+            $(document).on('click', '#confirm-import-btn', function(e) {
                 e.preventDefault();
                 
-                if (!window.csvRawData || window.csvRawData.length === 0) {
-                    if ($('.import-status').length === 0) {
-                        $('.csv-preview-container').append('<div class="import-status" style="margin-top: 20px;"></div>');
-                    }
-                    $('.import-status').html('<div class="notice notice-error"><p>No data to import. Please upload a CSV file first.</p></div>');
+                if (!ChicagoLoftSearchAdmin.batchImportPayloadTemplate || ChicagoLoftSearchAdmin.batchImportPayloadTemplate.length === 0) {
+                    const $statusDiv = $('#preview-section .import-status').length ? $('#preview-section .import-status') : ($('.csv-preview-container').append('<div class="import-status" style="margin-top: 20px;"></div>'), $('#preview-section .import-status'));
+                    $statusDiv.html('<div class="notice notice-error"><p>No data to import. Please upload and preview a CSV file first.</p></div>');
                     return;
                 }
                 
                 const $button = $(this);
                 const originalButtonText = $button.text();
                 $button.prop('disabled', true).text('Importing...');
-                $('.csv-preview-container .preview-actions .button').not($button).prop('disabled', true);
+                $('#preview-section .preview-actions .button').not($button).prop('disabled', true); // Disable cancel button too
 
+                const $importStatusContainer = $('#progress-section'); // Use the dedicated progress section
+                const $importStatusDiv = $importStatusContainer.find('#import-status-message'); // For summary messages
+                const $progressBarContainer = $importStatusContainer.find('#import-progress-bar-container');
+                const $progressBar = $importStatusContainer.find('#import-progress-bar');
+                const $resultsLog = $importStatusContainer.find('#import-log');
+                
+                $('#preview-section').slideUp();
+                $importStatusContainer.slideDown();
 
-                const $importStatusDiv = $('.import-status');
-                $importStatusDiv.html(
-                    '<div class="import-progress-summary"></div>' +
-                    '<div class="import-progress-bar-container" style="width: 100%; background-color: #f3f3f3; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; overflow: hidden;">' +
-                        '<div class="import-progress-bar" style="width: 0%; height: 24px; background-color: #4CAF50; text-align: center; line-height: 24px; color: white; border-radius: 4px; transition: width 0.2s ease-in-out;">0%</div>' +
-                    '</div>' +
-                    '<ul class="import-results-log" style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 10px; margin-top:10px; background:#f9f9f9;"></ul>' +
-                    '<div class="import-final-actions" style="margin-top:15px;"></div>'
-                );
-                const $progressSummary = $importStatusDiv.find('.import-progress-summary');
-                const $progressBar = $importStatusDiv.find('.import-progress-bar');
-                const $resultsLog = $importStatusDiv.find('.import-results-log');
-                const $finalActions = $importStatusDiv.find('.import-final-actions');
+                $importStatusDiv.html('<p>Preparing import...</p>');
+                $progressBar.css('width', '0%').text('0%');
+                $resultsLog.empty();
                 
-                $progressSummary.html('<p>Preparing import...</p>');
-                
-                const allDataToImport = [];
-                $('.preview-row').each(function(index) {
-                    const rowData = JSON.parse(JSON.stringify(window.csvRawData[index])); 
-                    $(this).find('input[type="text"], textarea').each(function() {
-                        const fieldName = $(this).data('field');
-                        if (fieldName && rowData && rowData.preview_item_for_js) {
-                            rowData.preview_item_for_js[fieldName] = $(this).val();
-                        }
-                    });
-                    allDataToImport.push(rowData); 
+                const listingsToImport = [];
+                $('#data-preview-table tbody tr').each(function(index) {
+                    const editedMlsId = $(this).find('.editable-mls-id').val();
+                    
+                    // Clone the template item for this row
+                    const importItemPayload = JSON.parse(JSON.stringify(ChicagoLoftSearchAdmin.batchImportPayloadTemplate[index]));
+                    
+                    // Update the MLS ID in the preview_item_for_js part of the payload
+                    if (importItemPayload && importItemPayload.preview_item_for_js) {
+                        importItemPayload.preview_item_for_js.mls_id = editedMlsId;
+                    } else {
+                        // Fallback or error if structure is not as expected
+                        console.error("Payload structure error for item at index: ", index, importItemPayload);
+                        // Ensure mls_id is at least set if preview_item_for_js was missing
+                        if(!importItemPayload.preview_item_for_js) importItemPayload.preview_item_for_js = {};
+                        importItemPayload.preview_item_for_js.mls_id = editedMlsId;
+                    }
+                    listingsToImport.push(importItemPayload); 
                 });
                 
                 const batchSize = 20; 
                 let currentRecordIndex = 0;
-                const totalRecords = allDataToImport.length;
+                const totalRecords = listingsToImport.length;
                 let successCount = 0;
                 let errorCount = 0;
 
                 function importNextBatch() {
                     if (currentRecordIndex >= totalRecords) {
                         let summaryMessage = 'Import process finished. Total records: ' + totalRecords + ', Successful: ' + successCount + ', Errors: ' + errorCount + '.';
-                        $progressSummary.html('<p class="notice ' + (errorCount === 0 ? 'notice-success' : (successCount > 0 ? 'notice-warning' : 'notice-error')) +' is-dismissible">' + summaryMessage + '</p>');
+                        $importStatusDiv.html('<p class="notice ' + (errorCount === 0 ? 'notice-success' : (successCount > 0 ? 'notice-warning' : 'notice-error')) +' is-dismissible">' + summaryMessage + '</p>');
                         $progressBar.css('width', '100%').text('100%');
                         $button.prop('disabled', false).text(originalButtonText);
-                        $('.csv-preview-container .preview-actions .button').not($button).prop('disabled', false);
+                        $('#preview-section .preview-actions .button').not($button).prop('disabled', false); // Re-enable cancel
                         
                         if (successCount > 0) {
-                            $finalActions.html('<p><a href="admin.php?page=chicago-loft-search-listings" class="button button-primary">View All Listings</a></p>');
+                             $resultsLog.append('<li><a href="admin.php?page=chicago-loft-search-listings" class="button button-secondary">View Imported Listings</a></li>');
                         }
+                        // Option to upload another file
+                        $('#process-csv-button').prop('disabled', false).text('Preview Another CSV');
+                        $('#upload-section').slideDown();
+
                         return;
                     }
 
-                    const batch = allDataToImport.slice(currentRecordIndex, currentRecordIndex + batchSize);
+                    const batch = listingsToImport.slice(currentRecordIndex, currentRecordIndex + batchSize);
                     const currentBatchEndIndex = Math.min(currentRecordIndex + batch.length, totalRecords);
-                    $progressSummary.html('<p>Importing records ' + (currentRecordIndex + 1) + ' to ' + currentBatchEndIndex + ' of ' + totalRecords + '...</p>');
+                    $importStatusDiv.html('<p>Importing records ' + (currentRecordIndex + 1) + ' to ' + currentBatchEndIndex + ' of ' + totalRecords + '...</p>');
                     
                     let progressPercent = Math.round(((currentRecordIndex) / totalRecords) * 100);
                     $progressBar.css('width', progressPercent + '%').text(progressPercent + '%');
@@ -379,8 +403,8 @@
                         data: {
                             action: 'chicago_loft_search_import_listings_batch',
                             nonce: chicago_loft_search_admin.csv_import_nonce,
-                            listings_to_import: JSON.stringify(batch),
-                            listing_type: window.detectedListingType 
+                            listings_to_import: JSON.stringify(batch), // This is the array of {preview_item_for_js, original_csv_data, listing_type}
+                            listing_type: ChicagoLoftSearchAdmin.batchImportPayloadTemplate[0] ? ChicagoLoftSearchAdmin.batchImportPayloadTemplate[0].listing_type : 'imported_csv_item' // Send overall type
                         },
                         success: function(response) {
                             if (response.success && response.data.results && Array.isArray(response.data.results)) {
@@ -409,67 +433,51 @@
                 importNextBatch(); 
             });
             
-            $(document).on('click', '.import-final-actions .button.reload-page, .import-status .reload-page', function() {
-                window.location.href = 'admin.php?page=chicago-loft-search-listings';
+            // Handle Cancel / Upload New File button on preview screen
+            $(document).on('click', '#cancel-preview-button', function() {
+                $('#preview-section').slideUp();
+                $('#upload-section').slideDown();
+                $('#mls_csv_file').val(''); // Clear file input
+                ChicagoLoftSearchAdmin.csvHeaders = [];
+                ChicagoLoftSearchAdmin.previewDisplayData = [];
+                ChicagoLoftSearchAdmin.batchImportPayloadTemplate = [];
+                $('.csv-preview-container').html('');
+                $('.csv-upload-status').html('');
             });
         },
 
         /**
          * Build preview table based on actual CSV data
          */
-        buildPreviewTable: function(previewData) {
-            if (!previewData || previewData.length === 0) {
-                $('.csv-preview-container').html('<p>No data to preview.</p>');
+        buildPreviewTable: function(headers, previewItems) {
+            const $previewContainer = $('.csv-preview-container');
+            $previewContainer.html(''); // Clear previous preview
+
+            if (!headers || headers.length === 0 || !previewItems || previewItems.length === 0) {
+                $previewContainer.html('<p class="notice notice-warning">No data to preview or headers are missing.</p>');
                 return;
             }
             
-            const allKeys = new Set();
-            previewData.forEach(item => { 
-                Object.keys(item).forEach(key => {
-                    if (key !== 'listing_type' && key !== 'original_csv_data' && key !== 'preview_item_for_js') { 
-                        allKeys.add(key);
-                    }
-                });
-            });
+            let tableHtml = '<div class="csv-preview-wrapper" style="max-height: 600px; overflow: auto;"><table id="data-preview-table" class="wp-list-table widefat fixed striped csv-preview-table">';
             
-            const priorityFields = ['mls_id', 'address', 'building_name', 'agent_name', 'neighborhood', 'price', 'bedrooms', 'bathrooms', 'square_feet', 'year_built', 'description'];
-            const editableFields = ['mls_id', 'address', 'building_name', 'agent_name', 'neighborhood', 'description', 'price', 'bedrooms', 'bathrooms', 'square_feet', 'year_built', 'units', 'floors', 'hoa_fee', 'pet_policy', 'amenities', 'email', 'phone', 'specialty', 'license', 'image_urls', 'status'];
-            
-            const sortedKeys = [...allKeys].sort((a, b) => {
-                const aIsPriority = priorityFields.includes(a);
-                const bIsPriority = priorityFields.includes(b);
-                if (aIsPriority && !bIsPriority) return -1;
-                if (!aIsPriority && bIsPriority) return 1;
-                if (aIsPriority && bIsPriority) return priorityFields.indexOf(a) - priorityFields.indexOf(b);
-                return a.localeCompare(b); 
-            });
-            
-            let tableHtml = '<div class="csv-preview-wrapper"><table class="wp-list-table widefat striped csv-preview-table">';
+            // Build table header
             tableHtml += '<thead><tr>';
-            tableHtml += '<th>Row</th>';
-            
-            sortedKeys.forEach(key => {
-                let headerText = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                tableHtml += '<th>' + headerText + (editableFields.includes(key) ? ' <span class="dashicons dashicons-edit" title="Editable"></span>' : '') + '</th>';
+            tableHtml += '<th>MLS ID (Editable)</th>'; // First column is always editable MLS ID
+            headers.forEach(headerName => {
+                tableHtml += '<th>' + headerName.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</th>';
             });
-            
             tableHtml += '</tr></thead><tbody>';
             
-            previewData.forEach((item, index) => { 
-                tableHtml += '<tr class="preview-row" data-row-id="' + index + '">';
-                tableHtml += '<td>' + (index + 1) + '</td>';
+            // Build table rows
+            previewItems.forEach((item, index) => { // item here is { mls_id, original_data_preview: {H1:V1,...} }
+                tableHtml += '<tr class="preview-row" data-row-index="' + index + '">';
+                // MLS ID cell (editable)
+                tableHtml += '<td><input type="text" class="editable-mls-id regular-text" value="' + (item.mls_id || '').replace(/"/g, '&quot;') + '"></td>';
                 
-                sortedKeys.forEach(key => {
-                    const value = item[key] !== undefined && item[key] !== null ? String(item[key]) : '';
-                    let cellValue;
-                    if (key === 'description' && editableFields.includes(key)) {
-                         cellValue = '<textarea data-field="' + key + '" class="regular-text" rows="2">' + value.replace(/"/g, '&quot;') + '</textarea>';
-                    } else if (editableFields.includes(key)) {
-                        cellValue = '<input type="text" data-field="' + key + '" value="' + value.replace(/"/g, '&quot;') + '" class="regular-text">';
-                    } else {
-                        cellValue = value.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); 
-                    }
-                    tableHtml += '<td>' + cellValue + '</td>';
+                // Original data cells (read-only)
+                headers.forEach(headerName => {
+                    const value = item.original_data_preview[headerName] !== undefined && item.original_data_preview[headerName] !== null ? String(item.original_data_preview[headerName]) : '';
+                    tableHtml += '<td>' + value.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') + '</td>';
                 });
                 
                 tableHtml += '</tr>';
@@ -477,14 +485,17 @@
             
             tableHtml += '</tbody></table></div>'; 
             
-            tableHtml += '<div class="preview-actions" style="margin-top: 20px; padding-top:15px; border-top:1px solid #ddd;">';
-            tableHtml += '<button id="confirm-import-btn" class="button button-primary">Confirm and Start Import</button>'; // This ID should match the event handler
-            tableHtml += ' <a href="' + window.location.pathname + '?page=' + new URLSearchParams(window.location.search).get('page') + '" class="button">Cancel / Upload New File</a>';
-            tableHtml += '</div>';
+            // Add action buttons and status area if not already part of the static HTML structure targeted by selectors
+            // Assuming #preview-section contains these or similar elements.
+            // If not, they should be appended here or ensured they exist in import-page.php.
+            // For this example, assuming the structure in import-page.php is sufficient and we just fill the table.
             
-            tableHtml += '<div class="import-status" style="margin-top: 20px; padding-top:15px; border-top:1px solid #ddd;"></div>';
-            
-            $('.csv-preview-container').html(tableHtml);
+            $previewContainer.html(tableHtml);
+
+            // Ensure the import status div exists within the preview section for messages
+            if ($('#preview-section .import-status').length === 0) {
+                 $('#preview-section .preview-actions').after('<div class="import-status" style="margin-top: 20px; padding-top:15px; border-top:1px solid #ddd;"></div>');
+            }
         },
 
         /**

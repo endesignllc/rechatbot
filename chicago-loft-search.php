@@ -3,7 +3,7 @@
  * Plugin Name: Chicago Loft Search
  * Plugin URI: https://example.com/chicago-loft-search
  * Description: A secure WordPress plugin that allows users to search Chicago loft listings using ChatGPT-powered natural language queries.
- * Version: 1.0.4
+ * Version: 1.0.5
  * Author: Factory AI
  * Author URI: https://factory.ai
  * License: GPL-2.0+
@@ -20,7 +20,7 @@ if (!defined('WPINC')) {
 }
 
 // Define plugin constants
-define('CHICAGO_LOFT_SEARCH_VERSION', '1.0.4');
+define('CHICAGO_LOFT_SEARCH_VERSION', '1.0.5');
 define('CHICAGO_LOFT_SEARCH_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CHICAGO_LOFT_SEARCH_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('CHICAGO_LOFT_SEARCH_PLUGIN_BASENAME', plugin_basename(__FILE__));
@@ -96,7 +96,7 @@ function chicago_loft_search_create_tables() {
     $table_name = $wpdb->prefix . 'chicago_loft_listings';
     $sql = "CREATE TABLE $table_name (
         id bigint(20) NOT NULL AUTO_INCREMENT,
-        mls_id varchar(50) NOT NULL,
+        mls_id varchar(255) NOT NULL, /* Increased length for potentially longer generated IDs */
         address varchar(255) DEFAULT NULL, 
         neighborhood varchar(100) DEFAULT NULL,
         price decimal(12,2) DEFAULT NULL,
@@ -108,10 +108,10 @@ function chicago_loft_search_create_tables() {
         description longtext DEFAULT NULL,
         image_urls longtext DEFAULT NULL, 
         status varchar(50) DEFAULT 'active',
-        raw_data longtext DEFAULT NULL,
+        raw_data longtext DEFAULT NULL, /* To store the full JSON of the original CSV row */
         date_added datetime NOT NULL,
         date_updated datetime NOT NULL,
-        listing_type varchar(20) DEFAULT 'loft',
+        listing_type varchar(50) DEFAULT 'imported_csv_item', /* Changed default and increased length */
         
         building_name varchar(255) DEFAULT NULL,
         units int(11) DEFAULT NULL,
@@ -257,6 +257,17 @@ function chicago_loft_search_check_and_upgrade_db() {
             }
         }
     }
+    if (version_compare($current_db_version, '1.0.5', '<')) {
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'chicago_loft_listings';
+        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name)) == $table_name) {
+            // Increase mls_id length
+            $wpdb->query("ALTER TABLE $table_name MODIFY COLUMN `mls_id` varchar(255) NOT NULL");
+            // Change listing_type default and length
+            $wpdb->query("ALTER TABLE $table_name MODIFY COLUMN `listing_type` varchar(50) DEFAULT 'imported_csv_item'");
+        }
+    }
+
      if (version_compare($current_db_version, CHICAGO_LOFT_SEARCH_VERSION, '<')) {
         update_option('chicago_loft_search_db_version', CHICAGO_LOFT_SEARCH_VERSION);
     }
@@ -540,18 +551,21 @@ class Chicago_Loft_Listings_Table extends WP_List_Table {
     
     protected function column_primary_identifier($item) {
         $identifier = '';
-        switch ($item['listing_type']) {
-            case 'building':
-                $identifier = $item['building_name'] ?: $item['address'];
-                break;
-            case 'agent':
-                $identifier = $item['agent_name'];
-                break;
-            case 'loft':
-            default:
+        // Since all data is in raw_data, try to get a common identifier like Address or Name
+        $raw_data = json_decode($item['raw_data'], true);
+        if (is_array($raw_data)) {
+            if (!empty($raw_data['Address'])) {
+                $identifier = $raw_data['Address'];
+            } elseif (!empty($raw_data['Building Name'])) {
+                $identifier = $raw_data['Building Name'];
+            } elseif (!empty($raw_data['Agent Name'])) {
+                 $identifier = $raw_data['Agent Name'];
+            } elseif (!empty($item['address'])) { // Fallback to old column if raw_data is missing it
                 $identifier = $item['address'];
-                break;
+            }
         }
+        if (empty($identifier) && !empty($item['address'])) $identifier = $item['address']; // Final fallback
+        
         return esc_html($identifier ?: __('N/A', 'chicago-loft-search'));
     }
     
@@ -559,13 +573,31 @@ class Chicago_Loft_Listings_Table extends WP_List_Table {
         switch ($column_name) {
             case 'mls_id':
             case 'listing_type':
-            case 'neighborhood':
             case 'status':
                 return esc_html($item[$column_name] ?: __('N/A', 'chicago-loft-search'));
+            case 'neighborhood': // Try to get from raw_data if specific column is empty
+                 $raw_data = json_decode($item['raw_data'], true);
+                 $neighborhood = $item['neighborhood'];
+                 if (is_array($raw_data) && !empty($raw_data['Neighborhood'])) {
+                     $neighborhood = $raw_data['Neighborhood'];
+                 } elseif (is_array($raw_data) && !empty($raw_data['City and Neighborhood'])) {
+                     $neighborhood = _chicago_loft_search_extract_neighborhood_from_string($raw_data['City and Neighborhood']);
+                 }
+                 return esc_html($neighborhood ?: __('N/A', 'chicago-loft-search'));
             case 'date_updated':
                 return date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($item[$column_name]));
             default:
-                return isset($item[$column_name]) ? esc_html($item[$column_name]) : print_r($item, true); 
+                // For other columns, try to pull from raw_data if the direct column is empty
+                $value = $item[$column_name];
+                if (empty($value)) {
+                    $raw_data = json_decode($item['raw_data'], true);
+                    // Convert column_name (e.g. building_name) to CSV-like header (e.g. Building Name)
+                    $header_key = ucwords(str_replace('_', ' ', $column_name));
+                    if (is_array($raw_data) && isset($raw_data[$header_key])) {
+                        $value = $raw_data[$header_key];
+                    }
+                }
+                return isset($value) ? esc_html($value) : print_r($item, true); 
         }
     }
 
@@ -587,8 +619,9 @@ class Chicago_Loft_Listings_Table extends WP_List_Table {
         
         if (!empty($_REQUEST['s'])) {
             $search_term = '%' . $wpdb->esc_like(sanitize_text_field($_REQUEST['s'])) . '%';
-            $search_fields = "(mls_id LIKE %s OR address LIKE %s OR neighborhood LIKE %s OR building_name LIKE %s OR agent_name LIKE %s OR description LIKE %s)";
-            $where_clauses[] = $wpdb->prepare($search_fields, $search_term, $search_term, $search_term, $search_term, $search_term, $search_term);
+            // Search in mls_id, address, neighborhood, and raw_data JSON
+            $search_fields = "(mls_id LIKE %s OR address LIKE %s OR neighborhood LIKE %s OR building_name LIKE %s OR agent_name LIKE %s OR description LIKE %s OR raw_data LIKE %s)";
+            $where_clauses[] = $wpdb->prepare($search_fields, $search_term, $search_term, $search_term, $search_term, $search_term, $search_term, $search_term);
         }
         
         $sql_where = "";
@@ -616,7 +649,8 @@ class Chicago_Loft_Listings_Table extends WP_List_Table {
         if ($orderby === 'primary_identifier') $orderby = 'address'; 
         $order = (!empty($_REQUEST['order']) && in_array(strtoupper($_REQUEST['order']), array('ASC', 'DESC'))) ? $_REQUEST['order'] : 'DESC';
         
-        $query = "SELECT id, mls_id, listing_type, address, building_name, agent_name, neighborhood, status, date_updated FROM $table_name" . $sql_where;
+        // Select all columns including raw_data
+        $query = "SELECT * FROM $table_name" . $sql_where;
         $query .= " ORDER BY $orderby $order";
         $query .= " LIMIT $per_page";
         $query .= " OFFSET " . (($current_page - 1) * $per_page);
@@ -631,9 +665,10 @@ class Chicago_Loft_Listings_Table extends WP_List_Table {
             <div class="alignleft actions">
                 <select name="listing_type_filter" id="listing_type_filter">
                     <option value=""><?php _e('All Types', 'chicago-loft-search'); ?></option>
-                    <option value="loft" <?php selected($current_filter, 'loft'); ?>><?php _e('Loft', 'chicago-loft-search'); ?></option>
-                    <option value="building" <?php selected($current_filter, 'building'); ?>><?php _e('Building', 'chicago-loft-search'); ?></option>
-                    <option value="agent" <?php selected($current_filter, 'agent'); ?>><?php _e('Agent', 'chicago-loft-search'); ?></option>
+                    <option value="imported_csv_item" <?php selected($current_filter, 'imported_csv_item'); ?>><?php _e('Imported CSV Item', 'chicago-loft-search'); ?></option>
+                    <option value="loft" <?php selected($current_filter, 'loft'); ?>><?php _e('Loft (Legacy)', 'chicago-loft-search'); ?></option>
+                    <option value="building" <?php selected($current_filter, 'building'); ?>><?php _e('Building (Legacy)', 'chicago-loft-search'); ?></option>
+                    <option value="agent" <?php selected($current_filter, 'agent'); ?>><?php _e('Agent (Legacy)', 'chicago-loft-search'); ?></option>
                 </select>
                 <?php submit_button(__('Filter'), 'button', 'filter_action', false, array('id' => 'post-query-submit')); ?>
             </div>
@@ -1060,51 +1095,105 @@ function chicago_loft_search_ajax_handler() {
         return;
     }
 
-    $max_chars_for_csv_context = apply_filters('chicago_loft_search_csv_context_max_chars', 15000);
-    $csv_data_for_gpt_structured = chicago_loft_search_query_csv_documents($query, $max_chars_for_csv_context);
+    // --- Start: Database Query for Context ---
+    global $wpdb;
+    $listings_table = $wpdb->prefix . 'chicago_loft_listings';
+    $db_listings_for_context = array();
+    $listings_for_formatter = array(); // For linking MLS IDs in response
+    
+    // Simple keyword extraction for DB query (can be enhanced)
+    $query_keywords = preg_split('/\\s+/', strtolower($query));
+    $query_keywords = array_filter($query_keywords, function($kw) { return strlen($kw) > 2; });
+
+    if (!empty($query_keywords)) {
+        $search_conditions = array();
+        foreach ($query_keywords as $keyword) {
+            $search_conditions[] = $wpdb->prepare("raw_data LIKE %s", '%' . $wpdb->esc_like($keyword) . '%');
+        }
+        $search_sql_where = implode(' OR ', $search_conditions);
+        
+        // Fetch a limited number of relevant listings from DB
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.DirectQuery
+        $matched_db_listings = $wpdb->get_results(
+            // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+            "SELECT mls_id, raw_data FROM $listings_table WHERE listing_type = 'imported_csv_item' AND status = 'active' AND ($search_sql_where) LIMIT 10"
+        );
+
+        if (!empty($matched_db_listings)) {
+            foreach ($matched_db_listings as $db_listing) {
+                $decoded_raw_data = json_decode($db_listing->raw_data, true);
+                if (is_array($decoded_raw_data)) {
+                    // Add mls_id to the decoded raw data if not already prominently there, for context and formatter
+                    if (!isset($decoded_raw_data['mls_id']) && !isset($decoded_raw_data['MLS ID'])) {
+                         $decoded_raw_data['Retrieved_MLS_ID'] = $db_listing->mls_id;
+                    }
+                    $db_listings_for_context[] = $decoded_raw_data;
+                    $listings_for_formatter[] = array_merge(['mls_id' => $db_listing->mls_id], $decoded_raw_data); // Ensure mls_id is top-level for formatter
+                }
+            }
+        }
+    }
+    // --- End: Database Query for Context ---
     
     $final_system_prompt = $system_prompt_template;
     $data_context_for_api_string = "";
+    $max_chars_for_context = apply_filters('chicago_loft_search_db_context_max_chars', 15000);
 
-    if (!empty($csv_data_for_gpt_structured)) {
-        $json_encoded_csv_data = json_encode($csv_data_for_gpt_structured);
+    if (!empty($db_listings_for_context)) {
+        $json_encoded_db_data = json_encode($db_listings_for_context);
         $truncation_note = "";
 
-        if (strlen($json_encoded_csv_data) > $max_chars_for_csv_context) {
-            $data_context_for_api_string = substr($json_encoded_csv_data, 0, $max_chars_for_csv_context);
+        if (strlen($json_encoded_db_data) > $max_chars_for_context) {
+            $data_context_for_api_string = substr($json_encoded_db_data, 0, $max_chars_for_context);
+            // Basic truncation, try to keep valid JSON structure
             $last_brace = strrpos($data_context_for_api_string, '}');
             $last_bracket = strrpos($data_context_for_api_string, ']');
-            
-            $cut_off_point = -1;
-            if ($last_bracket !== false && ($last_brace === false || $last_bracket > $last_brace)) {
-                 $temp_str = substr($data_context_for_api_string, 0, $last_bracket + 1);
-                 if (json_decode($temp_str) !== null || json_last_error() === JSON_ERROR_NONE) {
-                     $data_context_for_api_string = $temp_str;
-                 } else {
-                     $last_obj_in_array = strrpos($data_context_for_api_string, '},');
-                     if ($last_obj_in_array !== false) {
-                         $data_context_for_api_string = substr($data_context_for_api_string, 0, $last_obj_in_array + 1) . ']'; 
-                     }
-                 }
-            } elseif ($last_brace !== false) { 
-                 $data_context_for_api_string = substr($data_context_for_api_string, 0, $last_brace + 1);
+             if ($last_bracket > $last_brace && $last_bracket !== false) { // Ends with array of objects
+                $data_context_for_api_string = substr($data_context_for_api_string, 0, $last_bracket + 1);
+            } elseif ($last_brace !== false) { // Ends with an object
+                $data_context_for_api_string = substr($data_context_for_api_string, 0, $last_brace + 1);
             }
-            if (json_decode($data_context_for_api_string) === null && json_last_error() !== JSON_ERROR_NONE) {
-                // Truncation might have resulted in invalid JSON.
-            }
-            $truncation_note = "\n[Note: The provided CSV data context was truncated to fit within processing limits and may be incomplete.]";
+            // Ensure it's valid JSON after truncation, or append note
+             if (json_decode($data_context_for_api_string) === null && json_last_error() !== JSON_ERROR_NONE) {
+                // If still not valid, might need more sophisticated truncation or send less data
+             }
+            $truncation_note = "\n[Note: The provided database context was truncated to fit limits and may be incomplete.]";
         } else {
-            $data_context_for_api_string = $json_encoded_csv_data;
+            $data_context_for_api_string = $json_encoded_db_data;
         }
         
         if (!empty($data_context_for_api_string) && (json_decode($data_context_for_api_string) !== null || json_last_error() === JSON_ERROR_NONE)) {
-            $final_system_prompt .= "\n\nUse the following data from CSV documents to answer the user's query. This data is specific to their search and is structured as an array of objects, where each object represents a CSV file and contains its 'source_file' (filename), 'columns' (an array of column headers), and 'rows' (an array of matching data rows, where each row is an associative array of header:value pairs):\n" . $data_context_for_api_string . $truncation_note;
+            $final_system_prompt .= "\n\nUse the following data from imported listings to answer the user's query. This data is specific to their search and is an array of listing objects, where each object contains various property details:\n" . $data_context_for_api_string . $truncation_note;
         } else {
-             $final_system_prompt .= "\n\nRelevant data was found in CSV documents but could not be fully processed to fit within context limits for the query: \"" . esc_html($query) . "\". Please use your general knowledge or ask for clarification if needed.";
+             $final_system_prompt .= "\n\nRelevant data was found in imported listings but could not be fully processed for your query: \"" . esc_html($query) . "\". Please use your general knowledge or ask for clarification.";
         }
 
     } else {
-        $final_system_prompt .= "\n\nNo specific data was found in local CSV documents matching the query: \"" . esc_html($query) . "\". Please use your general knowledge or ask for clarification if needed.";
+        // Fallback or augment with CSV file querying if no DB results or if desired
+        $csv_file_data_for_gpt = chicago_loft_search_query_csv_documents($query, $max_chars_for_context);
+        if(!empty($csv_file_data_for_gpt)) {
+            $json_encoded_csv_file_data = json_encode($csv_file_data_for_gpt);
+            // Truncation logic for csv_file_data similar to above if needed
+            $final_system_prompt .= "\n\nAdditionally, consider the following data extracted from uploaded CSV files that might be relevant. This data is structured as an array of objects, where each object represents a CSV file and contains its 'source_file', 'columns', and 'rows' of matching data:\n" . $json_encoded_csv_file_data;
+             // Populate listings_for_formatter from CSV file data if it's the primary source here
+            if (empty($db_listings_for_context)) { // Only if DB didn't yield results
+                foreach ($csv_file_data_for_gpt as $file_data) {
+                    if (isset($file_data['rows']) && is_array($file_data['rows'])) {
+                        foreach($file_data['rows'] as $row_item) {
+                            // Assuming row_item might have an 'MLS ID' or similar key for formatter
+                            $mls_key_found = '';
+                            foreach (['MLS ID', 'mls_id', 'MLSID', 'Listing ID'] as $key_check) {
+                                if(isset($row_item[$key_check])) { $mls_key_found = $row_item[$key_check]; break; }
+                            }
+                            if($mls_key_found) $listings_for_formatter[] = array_merge(['mls_id' => $mls_key_found], $row_item);
+                            else  $listings_for_formatter[] = $row_item; // No clear MLS ID for linking
+                        }
+                    }
+                }
+            }
+        } else {
+            $final_system_prompt .= "\n\nNo specific data was found in imported listings or uploaded CSV files matching the query: \"" . esc_html($query) . "\". Please use your general knowledge or ask for clarification.";
+        }
     }
     
     $request_data = array(
@@ -1153,15 +1242,6 @@ function chicago_loft_search_ajax_handler() {
     
     chicago_loft_search_update_usage_count();
     chicago_loft_search_log_query($query, $content, $tokens_used);
-    
-    $listings_for_formatter = [];
-    if (!empty($csv_data_for_gpt_structured)) {
-        foreach ($csv_data_for_gpt_structured as $file_data) {
-            if (isset($file_data['rows']) && is_array($file_data['rows'])) {
-                $listings_for_formatter = array_merge($listings_for_formatter, $file_data['rows']);
-            }
-        }
-    }
     
     $formatted_response = chicago_loft_search_format_response($content, $listings_for_formatter); 
     
@@ -1385,58 +1465,51 @@ function chicago_loft_search_import_data_rest($request) {
     $updated = 0;
     $errors = 0;
     
-    $default_listing_type = 'loft'; 
-
-    foreach ($data['listings'] as $listing) {
-        if (!isset($listing['mls_id']) || empty($listing['mls_id'])) {
-            $errors++;
-            continue;
+    // For REST API, we assume it's structured somewhat, but still prioritize raw_data
+    // The $listing here is an associative array of a single listing
+    foreach ($data['listings'] as $listing_from_rest) {
+        $mls_id = isset($listing_from_rest['mls_id']) ? sanitize_text_field($listing_from_rest['mls_id']) : null;
+        if (!$mls_id) {
+            // Attempt to generate an MLS ID if not provided, using some fields from the listing
+            $address_for_id = isset($listing_from_rest['address']) ? $listing_from_rest['address'] : (isset($listing_from_rest['street_address']) ? $listing_from_rest['street_address'] : '');
+            $mls_id = _chicago_loft_search_generate_mls_id_from_data($address_for_id . '-' . uniqid());
         }
-        
-        $current_listing_type = isset($listing['listing_type']) ? sanitize_text_field($listing['listing_type']) : $default_listing_type;
 
-        $base_data_for_db = array(
-            'mls_id' => sanitize_text_field($listing['mls_id']),
-            'status' => isset($listing['status']) ? sanitize_text_field($listing['status']) : 'active',
+        $data_for_db = array(
+            'mls_id'       => $mls_id,
+            'raw_data'     => json_encode($listing_from_rest), // Store the entire REST listing item
+            'status'       => isset($listing_from_rest['status']) ? sanitize_text_field($listing_from_rest['status']) : 'active',
+            'listing_type' => isset($listing_from_rest['listing_type']) ? sanitize_text_field($listing_from_rest['listing_type']) : 'imported_csv_item', // Or a specific type if provided
             'date_updated' => current_time('mysql'),
-            'listing_type' => $current_listing_type,
+            // Set other specific columns to NULL or default as they are now in raw_data
+            'address' => null, 'neighborhood' => null, 'price' => null, 'bedrooms' => null, 'bathrooms' => null,
+            'square_feet' => null, 'year_built' => null, 'features' => null, 'description' => null, 'image_urls' => null,
+            'building_name' => null, 'units' => null, 'floors' => null, 'hoa_fee' => null, 'pet_policy' => null, 'amenities' => null,
+            'agent_name' => null, 'email' => null, 'phone' => null, 'bio' => null, 'areas_of_expertise' => null, 'specialty' => null, 'license' => null,
         );
-
-        $listing_data_for_db = array();
-        if ($current_listing_type === 'loft') {
-            $listing_data_for_db = _chicago_loft_search_prepare_loft_data($listing, $listing, $base_data_for_db);
-        } elseif ($current_listing_type === 'building') {
-            $listing_data_for_db = _chicago_loft_search_prepare_building_data($listing, $listing, $base_data_for_db);
-        } elseif ($current_listing_type === 'agent') {
-            $listing_data_for_db = _chicago_loft_search_prepare_agent_data($listing, $listing, $base_data_for_db);
-        } else {
-             $errors++; 
-            continue;
-        }
         
-        $listing_data_for_db['raw_data'] = json_encode($listing);
-
-        $existing = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table_name WHERE mls_id = %s", $listing_data_for_db['mls_id']));
+        $existing = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $table_name WHERE mls_id = %s", $data_for_db['mls_id']));
         
         $current_format_array = array();
-        $data_for_operation = $listing_data_for_db;
+        foreach (array_values($data_for_db) as $value) {
+            if (is_int($value)) $current_format_array[] = '%d';
+            elseif (is_float($value)) $current_format_array[] = '%f';
+            else $current_format_array[] = '%s';
+        }
 
         if ($existing) {
-            foreach (array_values($data_for_operation) as $value) {
-                if (is_int($value)) $current_format_array[] = '%d';
-                elseif (is_float($value)) $current_format_array[] = '%f';
-                else $current_format_array[] = '%s';
-            }
-            $result = $wpdb->update( $table_name, $data_for_operation, array('mls_id' => $listing_data_for_db['mls_id']), $current_format_array, array('%s'));
+            $result = $wpdb->update( $table_name, $data_for_db, array('mls_id' => $data_for_db['mls_id']), $current_format_array, array('%s'));
             if ($result !== false) $updated++; else $errors++;
         } else {
-            $data_for_operation['date_added'] = current_time('mysql');
-            foreach (array_values($data_for_operation) as $value) {
+            $data_for_db['date_added'] = current_time('mysql');
+            // Rebuild format array as date_added is new
+            $current_format_array = array();
+            foreach (array_values($data_for_db) as $value) {
                 if (is_int($value)) $current_format_array[] = '%d';
                 elseif (is_float($value)) $current_format_array[] = '%f';
                 else $current_format_array[] = '%s';
             }
-            $result = $wpdb->insert( $table_name, $data_for_operation, $current_format_array);
+            $result = $wpdb->insert( $table_name, $data_for_db, $current_format_array);
             if ($result) $imported++; else $errors++;
         }
     }
@@ -1791,41 +1864,91 @@ function chicago_loft_search_get_loft_details() {
         <div class="listing-details"> 
             <h2 id="modal-title" class="listing-title">' . esc_html($title_text) . '</h2>';
 
-    if ($loft->listing_type === 'loft' || $loft->listing_type === 'building') {
-        $html .= '<div class="listing-neighborhood">' . esc_html($loft->neighborhood ?: '') . '</div>';
+    if ($loft->listing_type === 'loft' || $loft->listing_type === 'building' || $loft->listing_type === 'imported_csv_item') {
+        $neighborhood_display = $loft->neighborhood;
+        if (empty($neighborhood_display) && !empty($loft->raw_data)) {
+            $raw = json_decode($loft->raw_data, true);
+            if (is_array($raw) && !empty($raw['Neighborhood'])) {
+                $neighborhood_display = $raw['Neighborhood'];
+            } elseif (is_array($raw) && !empty($raw['City and Neighborhood'])) {
+                 $neighborhood_display = _chicago_loft_search_extract_neighborhood_from_string($raw['City and Neighborhood']);
+            }
+        }
+        $html .= '<div class="listing-neighborhood">' . esc_html($neighborhood_display ?: '') . '</div>';
     }
             
-    if ($loft->listing_type === 'loft') {
+    if ($loft->listing_type === 'loft' || $loft->listing_type === 'imported_csv_item') {
+        $price_display = $loft->price;
+        $bedrooms_display = $loft->bedrooms;
+        $bathrooms_display = $loft->bathrooms;
+        $sqft_display = $loft->square_feet;
+
+        if (!empty($loft->raw_data)) {
+            $raw = json_decode($loft->raw_data, true);
+            if (is_array($raw)) {
+                $price_display = !empty($raw['Price']) ? $raw['Price'] : $price_display;
+                $bedrooms_display = !empty($raw['Bedrooms']) ? $raw['Bedrooms'] : (!empty($raw['Beds']) ? $raw['Beds'] : $bedrooms_display);
+                $bathrooms_display = !empty($raw['Bathrooms']) ? $raw['Bathrooms'] : (!empty($raw['Baths']) ? $raw['Baths'] : $bathrooms_display);
+                $sqft_display = !empty($raw['Square Feet']) ? $raw['Square Feet'] : (!empty($raw['SqFt']) ? $raw['SqFt'] : $sqft_display);
+            }
+        }
+
         $html .= '<div class="listing-price-info">
-                <div class="listing-price">' . ($loft->price ? '$' . number_format_i18n($loft->price) : __('Price not available', 'chicago-loft-search')) . '</div>
+                <div class="listing-price">' . ($price_display ? '$' . number_format_i18n(floatval(str_replace(array('$', ','), '', $price_display)))) : __('Price not available', 'chicago-loft-search')) . '</div>
                 <div class="listing-specs">
-                    <span class="listing-beds">' . ($loft->bedrooms ? esc_html($loft->bedrooms) . ' ' . _n('Bed', 'Beds', $loft->bedrooms, 'chicago-loft-search') : '') . '</span>
-                    <span class="listing-baths">' . ($loft->bathrooms ? esc_html($loft->bathrooms) . ' ' . _n('Bath', 'Baths', floatval($loft->bathrooms), 'chicago-loft-search') : '') . '</span>
-                    <span class="listing-sqft">' . ($loft->square_feet ? number_format_i18n($loft->square_feet) . ' ' . __('sq ft', 'chicago-loft-search') : '') . '</span>
+                    <span class="listing-beds">' . ($bedrooms_display ? esc_html($bedrooms_display) . ' ' . _n('Bed', 'Beds', intval($bedrooms_display), 'chicago-loft-search') : '') . '</span>
+                    <span class="listing-baths">' . ($bathrooms_display ? esc_html($bathrooms_display) . ' ' . _n('Bath', 'Baths', floatval($bathrooms_display), 'chicago-loft-search') : '') . '</span>
+                    <span class="listing-sqft">' . ($sqft_display ? number_format_i18n(intval(str_replace(',', '', $sqft_display))) . ' ' . __('sq ft', 'chicago-loft-search') : '') . '</span>
                 </div>
             </div>';
     }
     
     $html .= $images_html; 
             
+    $description_display = $loft->description ?: ($loft->bio ?: '');
+     if (empty($description_display) && !empty($loft->raw_data)) {
+        $raw = json_decode($loft->raw_data, true);
+        if (is_array($raw) && !empty($raw['Description'])) {
+            $description_display = $raw['Description'];
+        } elseif (is_array($raw) && !empty($raw['Remarks'])) {
+            $description_display = $raw['Remarks'];
+        }
+    }
     $html .= '<div class="listing-description">
                 <h3>' . __('Description', 'chicago-loft-search') . '</h3>
-                <p>' . nl2br(esc_html($loft->description ?: ($loft->bio ?: __('Description not available.', 'chicago-loft-search')))) . '</p>
+                <p>' . nl2br(esc_html($description_display ?: __('Description not available.', 'chicago-loft-search'))) . '</p>
             </div>';
             
-    if ($loft->listing_type === 'loft') {
+    if ($loft->listing_type === 'loft' || $loft->listing_type === 'imported_csv_item') {
+         $year_built_display = $loft->year_built;
+         $sqft_display_detail = $loft->square_feet;
+         $price_display_detail = $loft->price;
+
+         if (!empty($loft->raw_data)) {
+            $raw = json_decode($loft->raw_data, true);
+            if (is_array($raw)) {
+                $year_built_display = !empty($raw['Year Built']) ? $raw['Year Built'] : (!empty($raw['YearBuilt']) ? $raw['YearBuilt'] : $year_built_display);
+                $sqft_display_detail = !empty($raw['Square Feet']) ? $raw['Square Feet'] : (!empty($raw['SqFt']) ? $raw['SqFt'] : $sqft_display_detail);
+                $price_display_detail = !empty($raw['Price']) ? $raw['Price'] : $price_display_detail;
+            }
+        }
+        $sqft_val = $sqft_display_detail ? intval(str_replace(',', '', $sqft_display_detail)) : 0;
+        $price_val = $price_display_detail ? floatval(str_replace(array('$', ','), '', $price_display_detail)) : 0;
+
         $html .= '<div class="listing-details-grid">
                 <div class="listing-details-column">
                     <h3>' . __('Property Details', 'chicago-loft-search') . '</h3>
                     <table class="listing-details-table">
                         <tr><th>' . __('MLS ID', 'chicago-loft-search') . ':</th><td>' . esc_html($loft->mls_id) . '</td></tr>
-                        <tr><th>' . __('Year Built', 'chicago-loft-search') . ':</th><td>' . ($loft->year_built ? esc_html($loft->year_built) : __('N/A', 'chicago-loft-search')) . '</td></tr>
-                        <tr><th>' . __('Square Feet', 'chicago-loft-search') . ':</th><td>' . ($loft->square_feet ? number_format_i18n($loft->square_feet) : __('N/A', 'chicago-loft-search')) . '</td></tr>';
-        if ($loft->square_feet > 0 && $loft->price > 0) { 
-            $html .= '<tr><th>' . __('Price per sq ft', 'chicago-loft-search') . ':</th><td>$' . number_format_i18n($loft->price / $loft->square_feet, 2) . '</td></tr>';
+                        <tr><th>' . __('Year Built', 'chicago-loft-search') . ':</th><td>' . ($year_built_display ? esc_html($year_built_display) : __('N/A', 'chicago-loft-search')) . '</td></tr>
+                        <tr><th>' . __('Square Feet', 'chicago-loft-search') . ':</th><td>' . ($sqft_val ? number_format_i18n($sqft_val) : __('N/A', 'chicago-loft-search')) . '</td></tr>';
+        if ($sqft_val > 0 && $price_val > 0) { 
+            $html .= '<tr><th>' . __('Price per sq ft', 'chicago-loft-search') . ':</th><td>$' . number_format_i18n($price_val / $sqft_val, 2) . '</td></tr>';
         }
         $html .= '</table></div><div class="listing-details-column"><h3>' . __('Features', 'chicago-loft-search') . '</h3>' . ($features_html ?: __('Features not available.', 'chicago-loft-search')) . '</div></div>';
+    
     } elseif ($loft->listing_type === 'building') {
+        // Similar logic for building, pulling from raw_data if specific fields are empty
         $html .= '<div class="listing-details-grid">
                 <div class="listing-details-column"><h3>' . __('Building Details', 'chicago-loft-search') . '</h3>
                 <table class="listing-details-table">
@@ -1840,6 +1963,7 @@ function chicago_loft_search_get_loft_details() {
                 <p><strong>' . __('Pet Policy:', 'chicago-loft-search') . '</strong> ' . esc_html($loft->pet_policy ?: 'N/A') . '</p>
                 </div></div>';
     } elseif ($loft->listing_type === 'agent') {
+         // Similar logic for agent
          $html .= '<div class="listing-details-grid">
                 <div class="listing-details-column"><h3>' . __('Agent Information', 'chicago-loft-search') . '</h3>
                 <table class="listing-details-table">
@@ -1868,174 +1992,58 @@ add_action('wp_ajax_nopriv_chicago_loft_search_get_loft_details', 'chicago_loft_
 
 /**
  * Helper to detect listing type from CSV headers.
+ * Simplified to return a generic type as per new requirements.
  */
 function _chicago_loft_search_detect_listing_type($headers) {
-    $headers_lower = array_map('strtolower', $headers);
-    
-    $building_signatures = ['building name', 'neighborhood', 'hoa fee', 'pet policy', 'amenities', 'year built', 'floors', 'units'];
-    $loft_signatures = [
-        // Core loft fields
-        'price', 'bedrooms', 'bathrooms', 'square_feet', 
-        // Address components (strong indicators if multiple are present)
-        'street number', 'compass point', 'street name', 'suffix',
-        'north or south', 'east or west',
-        'city and neighborhood', 'city', 'state', 'zip',
-        // Specific loft features from user's list
-        'exposed brick', 'exposed ductwork', 'concrete ceiling', 'timber ceiling', 
-        'timber posts', 'hardwood floors', 'oversized windows', 
-        'soft loft', 'hard loft', 'outdoor space', 'deck', 'balcony', 
-        'roof deck shared', 'roof deck private', 'walled master br', 'walled 2nd bedroom',
-        // Other common loft/property related fields
-        'loft name', 'loft features', 'elevator type', 'type',  // 'Type' can be e.g. "Loft", "Condo"
-        // Amenities / misc columns frequently present
-        'parking', 'parkingtype', 'fha approved', 'pets allowed', 'pets info',
-        'amenities', 'stories', 'units', 'latitude', 'longitude'
-    ];
-    $agent_signatures = ['agent name', 'bio', 'areas of expertise', 'phone', 'email', 'specialty', 'license'];
-    
-    $building_match_count = count(array_intersect($headers_lower, $building_signatures));
-    $loft_match_count = count(array_intersect($headers_lower, $loft_signatures));
-    $agent_match_count = count(array_intersect($headers_lower, $agent_signatures));
-    
-    // Prioritize loft if many specific loft/address component fields are present
-    if ($loft_match_count >= 4 && $loft_match_count > $building_match_count && $loft_match_count > $agent_match_count) {
-        return 'loft';
-    }
-    if ($building_match_count >= 3 && $building_match_count >= $loft_match_count && $building_match_count >= $agent_match_count) {
-        return 'building';
-    }
-    if ($agent_match_count >= 3) { 
-        return 'agent';
-    }
-    
-    if ($loft_match_count >= 2) return 'loft'; 
-    if ($building_match_count >= 1 && $loft_match_count < 2 && $agent_match_count < 2) return 'building';
-
-    return 'loft'; // Default
+    // All CSV imports will now be treated as 'imported_csv_item'
+    // The specific type detection logic is no longer needed for this simplified import.
+    return 'imported_csv_item';
 }
 
 /**
- * Helper to generate preview data based on listing type.
+ * Helper to generate preview data.
+ * Now passes through original CSV data with an added MLS ID.
  */
 function _chicago_loft_search_generate_preview_by_type($csv_row_assoc, $listing_type) {
-    $preview_item = array(
-        'listing_type' => $listing_type
-    );
+    // $listing_type is now generic, e.g., 'imported_csv_item'
     
-    // Helper to get value from CSV row, checking multiple common key variations
-    $get_csv_val = function($keys, $default = '') use ($csv_row_assoc) {
-        if (!is_array($keys)) $keys = [$keys];
-        foreach ($keys as $key) {
-            if (isset($csv_row_assoc[$key]) && trim($csv_row_assoc[$key]) !== '') {
-                return trim($csv_row_assoc[$key]);
+    // Try to find MLS ID from common column names
+    $mls_id_keys = ['MLS ID', 'MLSID', 'mls_id', 'MLS Number', 'Listing ID', 'listing_id'];
+    $mls_id = null;
+    $identifier_for_mls_generation = '';
+
+    foreach ($mls_id_keys as $key) {
+        if (isset($csv_row_assoc[$key]) && !empty(trim($csv_row_assoc[$key]))) {
+            $mls_id = trim($csv_row_assoc[$key]);
+            break;
+        }
+    }
+    
+    // If MLS ID not found, generate one. Try to use Address or a unique part of the row.
+    if (empty($mls_id)) {
+        $address_keys = ['Address', 'Street Address', 'Property Address'];
+        foreach($address_keys as $key) {
+            if(isset($csv_row_assoc[$key]) && !empty(trim($csv_row_assoc[$key]))) {
+                $identifier_for_mls_generation = trim($csv_row_assoc[$key]);
+                break;
             }
         }
-        return $default;
-    };
-    
-    switch ($listing_type) {
-        case 'building':
-            $building_name = $get_csv_val(['Building Name', 'BuildingName']);
-            $address_val = $get_csv_val(['Address']);
-            $neighborhood_source = $get_csv_val(['City and Neighborhood', 'Neighborhood']);
-            
-            $preview_item = array_merge($preview_item, array(
-                'mls_id' => _chicago_loft_search_generate_mls_id_from_data('building-' . $building_name . '-' . $address_val),
-                'building_name' => $building_name,
-                'address' => $address_val,
-                'neighborhood' => _chicago_loft_search_extract_neighborhood_from_string($neighborhood_source),
-                'year_built' => ($val = $get_csv_val(['Year Built', 'YearBuilt'])) ? intval($val) : null,
-                'units' => ($val = $get_csv_val(['Units'])) ? intval($val) : null,
-                'floors' => ($val = $get_csv_val(['Floors'])) ? intval($val) : null,
-                'hoa_fee' => $get_csv_val(['HOA Fee', 'HOAFee']),
-                'pet_policy' => $get_csv_val(['Pet Policy', 'PetPolicy', 'PetsInfo', 'Pets Allowed']),
-                'amenities' => $get_csv_val(['Amenities']),
-                'description' => _chicago_loft_search_construct_building_description_from_csv_row($csv_row_assoc),
-                'image_urls' => $get_csv_val(['Image URLs', 'ImageURL', 'Image Url']), 
-            ));
-            break;
-            
-        case 'agent':
-            $agent_name = $get_csv_val(['Agent Name', 'AgentName']);
-            
-            $preview_item = array_merge($preview_item, array(
-                'mls_id' => _chicago_loft_search_generate_mls_id_from_data('agent-' . $agent_name . '-' . $get_csv_val(['Email'], uniqid())),
-                'agent_name' => $agent_name,
-                'email' => $get_csv_val(['Email']),
-                'phone' => $get_csv_val(['Phone']),
-                'bio' => $get_csv_val(['Bio', 'Description']),
-                'areas_of_expertise' => $get_csv_val(['Areas of Expertise', 'AreasOfExpertise']),
-                'specialty' => $get_csv_val(['Specialty']),
-                'license' => $get_csv_val(['License']),
-                'image_urls' => $get_csv_val(['Image URL', 'ImageURL', 'Image Url']), // Agents usually have one image
-            ));
-            break;
-            
-        case 'loft':
-        default:
-            // Construct full address from components or use 'Address' field
-            $street_number = $get_csv_val(['Street Number', 'St Number', 'St Num']);
-            $compass_point = $get_csv_val(['Compass Point', 'Direction', 'Dir', 'North or South', 'East or West']); // e.g. N, S, E, W
-            $street_name = $get_csv_val(['Street Name', 'St Name']);
-            $suffix = $get_csv_val(['Suffix', 'St Suffix']); // e.g. St, Ave, Rd
-            $city_val = $get_csv_val(['City']);
-            $state_val = $get_csv_val(['State']);
-            $zip_val = $get_csv_val(['Zip', 'Zip Code', 'Postal Code']);
-
-            $address_parts = array_filter([$street_number, $compass_point, $street_name, $suffix]);
-            if (!empty($address_parts)) {
-                $address_line1 = implode(' ', $address_parts);
-                $full_address_parts = array_filter([$address_line1, $city_val, $state_val]);
-                $address_full = implode(', ', $full_address_parts);
-                if ($zip_val) $address_full .= ' ' . $zip_val;
-            } else {
-                $address_full = $get_csv_val(['Address']); // Fallback to a single 'Address' field
-            }
-
-            $neighborhood_source = $get_csv_val(['City and Neighborhood', 'Neighborhood']);
-            $year_built_val = $get_csv_val(['Year Built', 'YearBuilt']);
-            
-            $preview_item = array_merge($preview_item, array(
-                'original_address' => $address_full, 
-                'mls_id' => $get_csv_val(['MLS ID', 'MLSID'], _chicago_loft_search_generate_mls_id_from_data($address_full)),
-                'address' => $address_full,
-                'neighborhood' => _chicago_loft_search_extract_neighborhood_from_string($neighborhood_source, $city_val),
-                'price' => ($val = $get_csv_val(['Price', 'List Price'])) ? floatval(str_replace(array('$', ','), '', $val)) : null,
-                'bedrooms' => ($val = $get_csv_val(['Bedrooms', 'Beds'])) ? intval($val) : null,
-                'bathrooms' => ($val = $get_csv_val(['Bathrooms', 'Baths'])) ? floatval($val) : null,
-                'square_feet' => ($val = $get_csv_val(['Square Feet', 'SqFt', 'Sq Ft'])) ? intval(str_replace(',', '', $val)) : null,
-                'year_built' => ($year_built_val !== '') ? intval($year_built_val) : null,
-                'building_name' => $get_csv_val(['Building Name', 'BuildingName']),
-                'units' => ($val = $get_csv_val(['Units', 'Unit Number', 'Unit No'])) ? $val : null, // Unit number for a loft is a string
-                'stories' => ($val = $get_csv_val(['Stories'])) ? intval($val) : null, // Stories of the building
-                'type' => $get_csv_val(['Type', 'Property Type']), // e.g. Loft, Condo
-                'status' => $get_csv_val(['Status'], 'active'),
-                'description' => _chicago_loft_search_construct_description_from_csv_row($csv_row_assoc, $address_full),
-                'image_urls' => $get_csv_val(['Image URLs', 'ImageURL', 'Image Url', 'Images', 'Photos']), 
-                'features_preview' => substr(_chicago_loft_search_construct_features_from_csv_row($csv_row_assoc), 0, 150) . '...'
-            ));
-            break;
+        // If address is also not found, use a hash of the row or a truly unique id
+        if(empty($identifier_for_mls_generation)) {
+            $identifier_for_mls_generation = md5(implode('|', $csv_row_assoc));
+        }
+        $mls_id = _chicago_loft_search_generate_mls_id_from_data($identifier_for_mls_generation);
     }
+
+    // The preview item now includes the determined/generated MLS ID and the original CSV data.
+    // The frontend JS will need to dynamically display all columns from original_csv_data.
+    $preview_item = array(
+        'mls_id' => $mls_id, // This is the key field for editing/confirming
+        'listing_type' => $listing_type, // Generic type
+        'original_data_preview' => $csv_row_assoc // Pass the full original row for JS to display
+    );
+    
     return $preview_item;
-}
-
-/**
- * Helper to construct building description from CSV row.
- */
-function _chicago_loft_search_construct_building_description_from_csv_row($csv_row_assoc) {
-    $description_parts = array();
-    $building_name_key = isset($csv_row_assoc['Building Name']) ? 'Building Name' : (isset($csv_row_assoc['BuildingName']) ? 'BuildingName' : null);
-    $year_built_key = isset($csv_row_assoc['Year Built']) ? 'Year Built' : (isset($csv_row_assoc['YearBuilt']) ? 'YearBuilt' : null);
-
-    if ($building_name_key && !empty($csv_row_assoc[$building_name_key])) $description_parts[] = trim($csv_row_assoc[$building_name_key]) . ".";
-    if ($year_built_key && !empty($csv_row_assoc[$year_built_key])) $description_parts[] = "Built in " . trim($csv_row_assoc[$year_built_key]) . ".";
-    if (!empty($csv_row_assoc['Units'])) $description_parts[] = trim($csv_row_assoc['Units']) . " units in building.";
-    if (!empty($csv_row_assoc['Floors'])) $description_parts[] = trim($csv_row_assoc['Floors']) . " floors.";
-    if (!empty($csv_row_assoc['Amenities'])) $description_parts[] = "Amenities include " . trim($csv_row_assoc['Amenities']) . ".";
-    
-    if (empty($description_parts)) $description_parts[] = "Building in Chicago.";
-    
-    return implode(' ', $description_parts);
 }
 
 /**
@@ -2053,29 +2061,29 @@ function _chicago_loft_search_generate_mls_id_from_data($identifier_string) {
     if (empty($identifier_string) || strlen($identifier_string) < 5) {
         return 'uid-' . substr(md5(uniqid(rand(), true)), 0, 12);
     }
-    return sanitize_title($identifier_string . '-' . substr(md5($identifier_string . uniqid(rand(), true)), 0, 8));
+    // Sanitize and create a somewhat readable prefix, then add a hash for uniqueness.
+    // Using sanitize_title ensures it's URL-friendly.
+    return sanitize_title(substr($identifier_string, 0, 50)) . '-' . substr(md5($identifier_string . uniqid(rand(), true)), 0, 8);
 }
 
 /**
- * Helper to extract neighborhood.
+ * Helper to extract neighborhood. (Retained for potential use with raw_data display, but not for direct DB column population)
  */
 function _chicago_loft_search_extract_neighborhood_from_string($city_neighborhood_string, $city_val_from_csv = '') {
     if (empty($city_neighborhood_string)) return '';
     
-    // Remove city part if present (e.g., "Chicago, West Loop" -> "West Loop")
     if (!empty($city_val_from_csv)) {
         $city_neighborhood_string = str_ireplace($city_val_from_csv, '', $city_neighborhood_string);
     }
-    // Common city names to remove if not passed explicitly
     $common_cities = ['Chicago', 'Chicago IL'];
     foreach ($common_cities as $city) {
         $city_neighborhood_string = str_ireplace($city, '', $city_neighborhood_string);
     }
     
     $parts = explode(',', $city_neighborhood_string);
-    $neighborhood = trim(end($parts)); // Take the last part after splitting by comma
+    $neighborhood = trim(end($parts)); 
     
-    if (empty($neighborhood) && count($parts) > 0) { // If last part was empty, try first part
+    if (empty($neighborhood) && count($parts) > 0) { 
         $neighborhood = trim($parts[0]);
     }
     
@@ -2084,12 +2092,11 @@ function _chicago_loft_search_extract_neighborhood_from_string($city_neighborhoo
 
 
 /**
- * Helper to construct features string from CSV row (Loft specific).
+ * Helper to construct features string from CSV row. (Retained for raw_data display/ChatGPT context, not direct DB column)
  */
 function _chicago_loft_search_construct_features_from_csv_row($csv_row_assoc) {
     $features_list = array();
     $feature_columns_map = array(
-        // Boolean features (Y/N, 1/0, true/false, or text implies true)
         'Exposed Brick' => 'Exposed Brick', 
         'Exposed Ductwork' => 'Exposed Ductwork',
         'Concrete Ceiling' => 'Concrete Ceiling', 
@@ -2108,17 +2115,15 @@ function _chicago_loft_search_construct_features_from_csv_row($csv_row_assoc) {
         'Soft Loft' => 'Soft Loft Style', 
         'Hard Loft' => 'Hard Loft Style',
         'Fireplace' => 'Fireplace', 
-        'InUnitWasherDryer' => 'In-Unit Washer/Dryer', // Common variation
+        'InUnitWasherDryer' => 'In-Unit Washer/Dryer',
         'FHA Approved' => 'FHA Approved',
         'Pets Allowed' => 'Pets Allowed',
-
-        // Features with potential values
-        'Parking' => 'Parking: %s', // Value could be "Garage", "Included", "Y", etc.
+        'Parking' => 'Parking: %s',
         'ParkingType' => 'Parking Type: %s', 
         'PetsInfo' => 'Pet Info: %s', 
         'Amenities' => 'Amenities: %s', 
         'CeilingHeight' => 'Ceiling Height: %s ft',
-        'Type' => 'Property Type: %s' // e.g. Condo, Loft, Townhouse
+        'Type' => 'Property Type: %s'
     );
 
     foreach ($feature_columns_map as $csv_col_name => $feature_text_format) {
@@ -2127,7 +2132,7 @@ function _chicago_loft_search_construct_features_from_csv_row($csv_row_assoc) {
 
         if (isset($csv_row_assoc[$csv_col_name]) && trim($csv_row_assoc[$csv_col_name]) !== '') {
             $value = trim($csv_row_assoc[$csv_col_name]);
-        } elseif (isset($csv_row_assoc[$csv_col_name_spaceless]) && trim($csv_row_assoc[$csv_col_name_spaceless]) !== '') { // Check spaceless version
+        } elseif (isset($csv_row_assoc[$csv_col_name_spaceless]) && trim($csv_row_assoc[$csv_col_name_spaceless]) !== '') { 
             $value = trim($csv_row_assoc[$csv_col_name_spaceless]);
         }
         
@@ -2135,16 +2140,14 @@ function _chicago_loft_search_construct_features_from_csv_row($csv_row_assoc) {
             $is_boolean_like_true = in_array(strtoupper($value), ['Y', 'YES', '1', 'TRUE', 'ON']);
             $is_boolean_like_false = in_array(strtoupper($value), ['N', 'NO', '0', 'FALSE', 'OFF']);
 
-            if (strpos($feature_text_format, '%s') === false) { // It's a boolean feature name
+            if (strpos($feature_text_format, '%s') === false) { 
                 if ($is_boolean_like_true) {
                     $features_list[] = $feature_text_format;
                 }
-                // Optionally, handle explicit 'No' for boolean features if desired:
-                // else if ($is_boolean_like_false) { $features_list[] = "No " . strtolower($feature_text_format); }
-            } else { // It's a feature that expects a value
-                if ($is_boolean_like_true) { // If a Y/Yes was provided for a value field
+            } else { 
+                if ($is_boolean_like_true) { 
                      $features_list[] = str_replace(': %s', ' (Yes)', $feature_text_format);
-                } elseif (!$is_boolean_like_false) { // If it's not an explicit N/No, use the value
+                } elseif (!$is_boolean_like_false) { 
                     $features_list[] = sprintf($feature_text_format, $value);
                 }
             }
@@ -2154,7 +2157,7 @@ function _chicago_loft_search_construct_features_from_csv_row($csv_row_assoc) {
 }
 
 /**
- * Helper to construct description from CSV row (Loft specific).
+ * Helper to construct description from CSV row. (Retained for raw_data display/ChatGPT context)
  */
 function _chicago_loft_search_construct_description_from_csv_row($csv_row_assoc, $constructed_address = '') {
     $description_parts = array();
@@ -2162,7 +2165,6 @@ function _chicago_loft_search_construct_description_from_csv_row($csv_row_assoc,
     foreach($desc_keys as $key) {
         if (!empty($csv_row_assoc[$key])) {
             $description_parts[] = trim($csv_row_assoc[$key]);
-            // Found a primary description, use it and potentially append some structured info
             $year_built_val = isset($csv_row_assoc['Year Built']) ? trim($csv_row_assoc['Year Built']) : (isset($csv_row_assoc['YearBuilt']) ? trim($csv_row_assoc['YearBuilt']) : '');
             if ($year_built_val) $description_parts[] = "Built in {$year_built_val}.";
             
@@ -2172,7 +2174,6 @@ function _chicago_loft_search_construct_description_from_csv_row($csv_row_assoc,
         }
     }
 
-    // Fallback if no direct description column found - build one
     if (!empty($constructed_address)) {
          $description_parts[] = rtrim($constructed_address, ', ') . ".";
     }
@@ -2193,132 +2194,42 @@ function _chicago_loft_search_construct_description_from_csv_row($csv_row_assoc,
     if ($stories_val) $description_parts[] = "The building has " . $stories_val . " stories.";
     
     $units_val = isset($csv_row_assoc['Units']) ? trim($csv_row_assoc['Units']) : '';
-     if ($units_val && $property_type !== 'Single Family') { // Units might not apply to single family homes
-        // If it's a specific unit number from a column like 'Unit Number' or 'Unit No'
+     if ($units_val && $property_type !== 'Single Family') { 
         $unit_no_val = isset($csv_row_assoc['Unit Number']) ? trim($csv_row_assoc['Unit Number']) : (isset($csv_row_assoc['Unit No']) ? trim($csv_row_assoc['Unit No']) : '');
         if($unit_no_val) {
             $description_parts[] = "Unit #".$unit_no_val.".";
-        } elseif (is_numeric($units_val) && intval($units_val) > 0) { // If 'Units' is total units in building
-             // $description_parts[] = "It is one of " . $units_val . " units."; // This might be confusing if 'Units' is total in building
         }
     }
     
     $features_summary = _chicago_loft_search_construct_features_from_csv_row($csv_row_assoc);
     if ($features_summary) $description_parts[] = "Key features include: " . $features_summary . ".";
     
-    if (empty($description_parts)) $description_parts[] = "Charming loft property in Chicago."; // Generic fallback
+    if (empty($description_parts)) $description_parts[] = "Charming loft property in Chicago."; 
     
     return implode(' ', array_filter($description_parts));
 }
 
 
 /**
- * Helper to prepare loft data for database insertion.
+ * Helper to prepare data for database insertion, focusing on raw_data.
  */
-function _chicago_loft_search_prepare_loft_data($item, $original_csv_data, $base_data) {
-    // $item contains data from _chicago_loft_search_generate_preview_by_type
-    // $original_csv_data is the raw associative array from the CSV row
+function _chicago_loft_search_prepare_data_for_db($item_preview_from_js, $original_csv_row_assoc, $base_data) {
+    // $item_preview_from_js contains user-editable fields like MLS ID from JS preview
+    // $original_csv_row_assoc is the full original CSV row
+    // $base_data contains status, dates, generic listing_type
     
-    $data = array_merge($base_data, array(
-        'address' => isset($item['address']) ? sanitize_text_field($item['address']) : 'N/A',
-        'neighborhood' => isset($item['neighborhood']) ? sanitize_text_field($item['neighborhood']) : null,
-        'price' => isset($item['price']) && $item['price'] !== '' ? floatval($item['price']) : null,
-        'bedrooms' => isset($item['bedrooms']) && $item['bedrooms'] !== '' ? intval($item['bedrooms']) : null,
-        'bathrooms' => isset($item['bathrooms']) && $item['bathrooms'] !== '' ? floatval($item['bathrooms']) : null,
-        'square_feet' => isset($item['square_feet']) && $item['square_feet'] !== '' ? intval($item['square_feet']) : null,
-        'year_built' => isset($item['year_built']) && $item['year_built'] !== '' ? intval($item['year_built']) : null,
-        'features' => _chicago_loft_search_construct_features_from_csv_row($original_csv_data), // Re-construct from original for full list
-        'description' => isset($item['description']) ? sanitize_textarea_field($item['description']) : _chicago_loft_search_construct_description_from_csv_row($original_csv_data, $item['address']),
-        'image_urls' => null, // Initialize
-        'building_name' => isset($item['building_name']) ? sanitize_text_field($item['building_name']) : null,
-        'units' => isset($item['units']) ? sanitize_text_field($item['units']) : null, // Unit number can be string
-        'floors' => isset($original_csv_data['Stories']) && $original_csv_data['Stories'] !== '' ? intval($original_csv_data['Stories']) : null, // Building stories
-        // hoa_fee, pet_policy, amenities are more building-level, but can be in features for a loft
+    $data_for_db = array_merge($base_data, array(
+        'mls_id'       => !empty($item_preview_from_js['mls_id']) ? sanitize_text_field($item_preview_from_js['mls_id']) : $base_data['mls_id'],
+        'raw_data'     => json_encode($original_csv_row_assoc),
+        'listing_type' => 'imported_csv_item', // Standardized type for these imports
+        // Set all other specific columns to NULL, as their data is now in raw_data
+        'address' => null, 'neighborhood' => null, 'price' => null, 'bedrooms' => null, 'bathrooms' => null,
+        'square_feet' => null, 'year_built' => null, 'features' => null, 'description' => null, 'image_urls' => null,
+        'building_name' => null, 'units' => null, 'floors' => null, 'hoa_fee' => null, 'pet_policy' => null, 'amenities' => null,
+        'agent_name' => null, 'email' => null, 'phone' => null, 'bio' => null, 'areas_of_expertise' => null, 'specialty' => null, 'license' => null,
     ));
-
-    // Handle image_urls (could be comma-separated string or already an array from preview)
-    $image_urls_source = isset($item['image_urls']) ? $item['image_urls'] : (isset($original_csv_data['Image URLs']) ? $original_csv_data['Image URLs'] : '');
-    if (is_string($image_urls_source) && !empty($image_urls_source)) {
-        $urls = array_map('trim', explode(',', $image_urls_source));
-        $data['image_urls'] = json_encode(array_map('esc_url_raw', array_filter($urls)));
-    } elseif (is_array($image_urls_source)) {
-        $data['image_urls'] = json_encode(array_map('esc_url_raw', array_filter($image_urls_source)));
-    } else {
-        $data['image_urls'] = '[]';
-    }
     
-    return $data;
-}
-
-/**
- * Helper to prepare building data for database insertion.
- */
-function _chicago_loft_search_prepare_building_data($item, $original_csv_data, $base_data) {
-    $building_name_key = isset($original_csv_data['Building Name']) ? 'Building Name' : (isset($original_csv_data['BuildingName']) ? 'BuildingName' : null);
-    $building_name = !empty($item['building_name']) ? sanitize_text_field($item['building_name']) : ($building_name_key ? trim($original_csv_data[$building_name_key]) : '');
-    
-    $address = !empty($item['address']) ? sanitize_text_field($item['address']) : (isset($original_csv_data['Address']) ? trim($original_csv_data['Address']) : 'N/A');
-    $neighborhood_key = isset($original_csv_data['Neighborhood']) ? 'Neighborhood' : (isset($original_csv_data['City and Neighborhood']) ? 'City and Neighborhood' : null);
-    $neighborhood_raw = $neighborhood_key ? $original_csv_data[$neighborhood_key] : '';
-    $neighborhood = !empty($item['neighborhood']) ? sanitize_text_field($item['neighborhood']) : _chicago_loft_search_extract_neighborhood_from_string($neighborhood_raw);
-    
-    $data = array_merge($base_data, array(
-        'address' => $address,
-        'neighborhood' => $neighborhood,
-        'year_built' => isset($item['year_built']) && $item['year_built'] !== '' ? intval($item['year_built']) : (isset($original_csv_data['Year Built']) ? intval($original_csv_data['Year Built']) : (isset($original_csv_data['YearBuilt']) ? intval($original_csv_data['YearBuilt']) : null)),
-        'description' => !empty($item['description']) ? sanitize_textarea_field($item['description']) : _chicago_loft_search_construct_building_description_from_csv_row($original_csv_data),
-        'image_urls' => null, // Initialize
-        'building_name' => $building_name,
-        'units' => isset($item['units']) && $item['units'] !== '' ? intval($item['units']) : (isset($original_csv_data['Units']) ? intval($original_csv_data['Units']) : null),
-        'floors' => isset($item['floors']) && $item['floors'] !== '' ? intval($item['floors']) : (isset($original_csv_data['Floors']) ? intval($original_csv_data['Floors']) : (isset($original_csv_data['Stories']) ? intval($original_csv_data['Stories']) : null)),
-        'hoa_fee' => isset($item['hoa_fee']) ? sanitize_text_field($item['hoa_fee']) : (isset($original_csv_data['HOA Fee']) ? trim($original_csv_data['HOA Fee']) : (isset($original_csv_data['HOAFee']) ? trim($original_csv_data['HOAFee']) : '')),
-        'pet_policy' => isset($item['pet_policy']) ? sanitize_text_field($item['pet_policy']) : (isset($original_csv_data['Pet Policy']) ? trim($original_csv_data['Pet Policy']) : (isset($original_csv_data['PetPolicy']) ? trim($original_csv_data['PetPolicy']) : (isset($original_csv_data['PetsInfo']) ? trim($original_csv_data['PetsInfo']) : ''))),
-        'amenities' => isset($item['amenities']) ? sanitize_text_field($item['amenities']) : (isset($original_csv_data['Amenities']) ? trim($original_csv_data['Amenities']) : ''),
-    ));
-
-    $image_urls_source = isset($item['image_urls']) ? $item['image_urls'] : (isset($original_csv_data['Image URLs']) ? $original_csv_data['Image URLs'] : '');
-    if (is_string($image_urls_source) && !empty($image_urls_source)) {
-        $urls = array_map('trim', explode(',', $image_urls_source));
-        $data['image_urls'] = json_encode(array_map('esc_url_raw', array_filter($urls)));
-    } elseif (is_array($image_urls_source)) {
-        $data['image_urls'] = json_encode(array_map('esc_url_raw', array_filter($image_urls_source)));
-    } else {
-        $data['image_urls'] = '[]';
-    }
-    
-    return $data;
-}
-
-/**
- * Helper to prepare agent data for database insertion.
- */
-function _chicago_loft_search_prepare_agent_data($item, $original_csv_data, $base_data) {
-    $agent_name_key = isset($original_csv_data['Agent Name']) ? 'Agent Name' : (isset($original_csv_data['AgentName']) ? 'AgentName' : null);
-    $agent_name = !empty($item['agent_name']) ? sanitize_text_field($item['agent_name']) : ($agent_name_key ? trim($original_csv_data[$agent_name_key]) : '');
-    
-    $data = array_merge($base_data, array(
-        'agent_name' => $agent_name,
-        'email' => isset($item['email']) ? sanitize_email($item['email']) : (isset($original_csv_data['Email']) ? sanitize_email(trim($original_csv_data['Email'])) : ''),
-        'phone' => isset($item['phone']) ? sanitize_text_field($item['phone']) : (isset($original_csv_data['Phone']) ? sanitize_text_field(trim($original_csv_data['Phone'])) : ''),
-        'bio' => isset($item['bio']) ? sanitize_textarea_field($item['bio']) : (isset($original_csv_data['Bio']) ? sanitize_textarea_field(trim($original_csv_data['Bio'])) : ''),
-        'areas_of_expertise' => isset($item['areas_of_expertise']) ? sanitize_text_field($item['areas_of_expertise']) : (isset($original_csv_data['Areas of Expertise']) ? trim($original_csv_data['Areas of Expertise']) : (isset($original_csv_data['AreasOfExpertise']) ? trim($original_csv_data['AreasOfExpertise']) : '')),
-        'specialty' => isset($item['specialty']) ? sanitize_text_field($item['specialty']) : (isset($original_csv_data['Specialty']) ? trim($original_csv_data['Specialty']) : ''),
-        'license' => isset($item['license']) ? sanitize_text_field($item['license']) : (isset($original_csv_data['License']) ? trim($original_csv_data['License']) : ''),
-        'image_urls' => null, // Initialize
-        'description' => isset($item['bio']) ? sanitize_textarea_field($item['bio']) : (isset($original_csv_data['Bio']) ? sanitize_textarea_field(trim($original_csv_data['Bio'])) : ''), 
-    ));
-
-    $image_urls_source = isset($item['image_urls']) ? $item['image_urls'] : (isset($original_csv_data['Image URL']) ? $original_csv_data['Image URL'] : (isset($original_csv_data['ImageURL']) ? $original_csv_data['ImageURL'] : ''));
-    if (is_string($image_urls_source) && !empty($image_urls_source)) {
-        // Agents usually have one image, but handle comma for consistency if multiple provided by mistake
-        $urls = array_map('trim', explode(',', $image_urls_source));
-        $data['image_urls'] = json_encode(array_map('esc_url_raw', array_filter($urls)));
-    } elseif (is_array($image_urls_source)) { // Should not happen for agent based on preview logic, but good practice
-        $data['image_urls'] = json_encode(array_map('esc_url_raw', array_filter($image_urls_source)));
-    } else {
-        $data['image_urls'] = '[]';
-    }
-    return $data;
+    return $data_for_db;
 }
 
 
@@ -2326,6 +2237,7 @@ function _chicago_loft_search_prepare_agent_data($item, $original_csv_data, $bas
 
 /**
  * AJAX handler for parsing CSV and returning preview data.
+ * Sends all headers and raw row data to the frontend.
  */
 function chicago_loft_search_parse_csv_preview() {
     check_ajax_referer('chicago_loft_search_import_nonce', 'nonce'); 
@@ -2338,57 +2250,63 @@ function chicago_loft_search_parse_csv_preview() {
     }
 
     $file_path = $_FILES['mls_csv_file']['tmp_name'];
-    $preview_data = array();
-    $raw_data_for_import = array(); 
+    $preview_data_for_js = array(); // Data structured for JS preview table (includes generated MLS ID)
+    $raw_data_for_batch_import = array(); // Data structured for batch import (original CSV row + MLS ID)
     $header = null;
-    $listing_type = 'loft'; 
+    $listing_type = _chicago_loft_search_detect_listing_type(array()); // Get the generic type
 
     if (($handle = fopen($file_path, 'r')) !== false) {
         $row_count = 0;
         while (($row_values = fgetcsv($handle)) !== false) {
             if (!$header) {
                 $header = array_map('trim', $row_values);
-                $listing_type = _chicago_loft_search_detect_listing_type($header);
+                // No specific listing type detection from headers anymore, type is generic.
                 continue;
             }
             if (count($header) !== count($row_values)) { 
-                continue;
+                continue; // Skip malformed rows
             }
-            $csv_row_assoc = array();
+            
+            $csv_row_assoc = array(); // Original CSV row as associative array
             foreach ($header as $i => $col_name) {
                 $csv_row_assoc[$col_name] = isset($row_values[$i]) ? $row_values[$i] : null;
             }
             
-            $preview_item = _chicago_loft_search_generate_preview_by_type($csv_row_assoc, $listing_type);
-            $preview_data[] = $preview_item;
+            // Generate preview item (this now mainly adds an MLS ID to the original data)
+            $preview_item_struct = _chicago_loft_search_generate_preview_by_type($csv_row_assoc, $listing_type);
+            $preview_data_for_js[] = $preview_item_struct; // For JS to build the dynamic table
 
-            $raw_data_for_import[] = array(
-                'preview_item_for_js' => $preview_item, 
-                'original_csv_data' => $csv_row_assoc, 
-                'listing_type' => $listing_type 
+            // Data for batch import needs the original CSV row and the (potentially edited) MLS ID
+            $raw_data_for_batch_import[] = array(
+                'preview_item_for_js' => $preview_item_struct, // Contains mls_id that JS can edit
+                'original_csv_data'   => $csv_row_assoc,       // The full original row
+                'listing_type'        => $listing_type         // Generic type
             );
+
             $row_count++;
-            if ($row_count >= 200) break; 
+            if ($row_count >= 200) break; // Limit preview size for performance
         }
         fclose($handle);
     } else {
         wp_send_json_error(array('message' => __('Could not open CSV file.', 'chicago-loft-search')));
     }
 
-    if (empty($preview_data)) {
+    if (empty($preview_data_for_js)) {
         wp_send_json_error(array('message' => __('No data found in CSV or CSV format error (ensure header row exists).', 'chicago-loft-search')));
     }
 
     wp_send_json_success(array(
-        'preview_data' => $preview_data,  
-        'raw_data_for_import' => $raw_data_for_import, 
-        'listing_type' => $listing_type 
+        'headers' => $header, // Send original headers to JS
+        'preview_data' => $preview_data_for_js,  // Data for JS preview table (original_data_preview + mls_id)
+        'raw_data_for_import' => $raw_data_for_batch_import, // Data for the actual import process
+        'listing_type' => $listing_type // Generic type
     ));
 }
 add_action('wp_ajax_chicago_loft_search_parse_csv_preview', 'chicago_loft_search_parse_csv_preview');
 
 /**
  * AJAX handler for importing a batch of listings.
+ * Stores all CSV data into raw_data field.
  */
 function chicago_loft_search_import_listings_batch() {
     check_ajax_referer('chicago_loft_search_import_nonce', 'nonce'); 
@@ -2411,74 +2329,66 @@ function chicago_loft_search_import_listings_batch() {
     $table_name = $wpdb->prefix . 'chicago_loft_listings';
     $batch_results = array();
     
-    $overall_listing_type = isset($_POST['listing_type']) ? sanitize_text_field($_POST['listing_type']) : 'loft';
+    $overall_listing_type = isset($_POST['listing_type']) ? sanitize_text_field($_POST['listing_type']) : 'imported_csv_item'; // Use generic type
 
     foreach ($listings_batch_from_js as $js_item) {
-        $item_preview = isset($js_item['preview_item_for_js']) ? $js_item['preview_item_for_js'] : array();
-        $original_csv_data = isset($js_item['original_csv_data']) && is_array($js_item['original_csv_data']) ? $js_item['original_csv_data'] : array();
-        $current_type = isset($js_item['listing_type']) ? sanitize_text_field($js_item['listing_type']) : $overall_listing_type;
+        // $js_item contains 'preview_item_for_js' (with potentially edited mls_id) 
+        // and 'original_csv_data' (the full original CSV row)
+        $item_preview_from_js = isset($js_item['preview_item_for_js']) ? $js_item['preview_item_for_js'] : array();
+        $original_csv_row_assoc = isset($js_item['original_csv_data']) && is_array($js_item['original_csv_data']) ? $js_item['original_csv_data'] : array();
         
-        if (empty($original_csv_data)) {
+        if (empty($original_csv_row_assoc)) {
             $batch_results[] = array('success' => false, 'message' => __('Skipped item due to missing original CSV data.', 'chicago-loft-search'));
             continue;
         }
 
-        $mls_id = !empty($item_preview['mls_id']) ? sanitize_text_field($item_preview['mls_id']) : _chicago_loft_search_generate_mls_id_from_data(isset($item_preview['address']) ? $item_preview['address'] : uniqid('item-', true));
-        
-        $base_data = array(
-            'mls_id' => $mls_id,
-            'status' => sanitize_text_field(isset($item_preview['status']) ? $item_preview['status'] : 'active'),
-            'date_updated' => current_time('mysql'),
-            'listing_type' => $current_type,
-        );
-        
-        $data_to_insert = array();
-        switch ($current_type) {
-            case 'building':
-                $data_to_insert = _chicago_loft_search_prepare_building_data($item_preview, $original_csv_data, $base_data);
-                break;
-            case 'agent':
-                $data_to_insert = _chicago_loft_search_prepare_agent_data($item_preview, $original_csv_data, $base_data);
-                break;
-            case 'loft':
-            default:
-                $data_to_insert = _chicago_loft_search_prepare_loft_data($item_preview, $original_csv_data, $base_data);
-                break;
+        // Determine MLS ID: use from preview if edited, else from original preview generation, else generate new
+        $mls_id_from_preview = isset($item_preview_from_js['mls_id']) ? sanitize_text_field($item_preview_from_js['mls_id']) : null;
+        if(empty($mls_id_from_preview)) { // Fallback if JS didn't send it or it was empty
+            $temp_preview_for_id = _chicago_loft_search_generate_preview_by_type($original_csv_row_assoc, $overall_listing_type);
+            $mls_id_from_preview = $temp_preview_for_id['mls_id'];
         }
         
-        $data_to_insert['raw_data'] = json_encode($original_csv_data);
+        $base_data = array(
+            'mls_id'       => $mls_id_from_preview,
+            'status'       => sanitize_text_field(isset($item_preview_from_js['status']) ? $item_preview_from_js['status'] : 'active'), // Allow status override from JS if any
+            'date_updated' => current_time('mysql'),
+            'listing_type' => $overall_listing_type, // Use the generic type
+        );
         
-        $existing_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table_name WHERE mls_id = %s", $data_to_insert['mls_id']));
+        // Prepare data for DB, focusing on raw_data
+        $data_for_db = _chicago_loft_search_prepare_data_for_db($item_preview_from_js, $original_csv_row_assoc, $base_data);
+                
+        $existing_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table_name WHERE mls_id = %s", $data_for_db['mls_id']));
 
-        $data_for_db = $data_to_insert;
         if (!$existing_id) {
             $data_for_db['date_added'] = current_time('mysql');
         }
 
+        // Dynamically build format array based on the actual keys in $data_for_db
         $current_format_array = array();
-        foreach ($data_for_db as $key => $value) { // Iterate over keys to maintain order for format array
+        foreach ($data_for_db as $key => $value) { 
              if (is_int($value)) $current_format_array[$key] = '%d';
              elseif (is_float($value)) $current_format_array[$key] = '%f';
-             else $current_format_array[$key] = '%s';
+             else $current_format_array[$key] = '%s'; // Handles strings, nulls, and JSON strings
         }
         
-        // Ensure format array matches the order of data_for_db keys for $wpdb functions
         $ordered_format_array = array_values(array_intersect_key($current_format_array, $data_for_db));
 
 
         if ($existing_id) {
             $result = $wpdb->update($table_name, $data_for_db, array('id' => $existing_id), $ordered_format_array, array('%d'));
             if ($result !== false) {
-                $batch_results[] = array('success' => true, 'message' => sprintf(__('Updated %s ID %s', 'chicago-loft-search'), $current_type, $data_to_insert['mls_id']));
+                $batch_results[] = array('success' => true, 'message' => sprintf(__('Updated item with MLS ID %s', 'chicago-loft-search'), $data_for_db['mls_id']));
             } else {
-                $batch_results[] = array('success' => false, 'message' => sprintf(__('Error updating %s ID %s. DB Error: %s', 'chicago-loft-search'), $current_type, $data_to_insert['mls_id'], $wpdb->last_error));
+                $batch_results[] = array('success' => false, 'message' => sprintf(__('Error updating item with MLS ID %s. DB Error: %s', 'chicago-loft-search'), $data_for_db['mls_id'], $wpdb->last_error));
             }
         } else {
             $result = $wpdb->insert($table_name, $data_for_db, $ordered_format_array);
             if ($result) {
-                $batch_results[] = array('success' => true, 'message' => sprintf(__('Imported %s ID %s', 'chicago-loft-search'), $current_type, $data_to_insert['mls_id']));
+                $batch_results[] = array('success' => true, 'message' => sprintf(__('Imported item with MLS ID %s', 'chicago-loft-search'), $data_for_db['mls_id']));
             } else {
-                $batch_results[] = array('success' => false, 'message' => sprintf(__('Error importing %s ID %s. DB Error: %s', 'chicago-loft-search'), $current_type, $data_to_insert['mls_id'], $wpdb->last_error));
+                $batch_results[] = array('success' => false, 'message' => sprintf(__('Error importing item with MLS ID %s. DB Error: %s', 'chicago-loft-search'), $data_for_db['mls_id'], $wpdb->last_error));
             }
         }
     }
