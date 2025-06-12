@@ -62,7 +62,7 @@ if ( ! defined( 'WPINC' ) ) {
             </table>
         </div>
         <p class="submit">
-            <button type="button" id="start-import-button" class="button button-primary"><?php esc_html_e( 'Confirm and Start Import', 'chicago-loft-search' ); ?></button>
+            <button type="button" id="confirm-import-btn" class="button button-primary"><?php esc_html_e( 'Confirm and Start Import', 'chicago-loft-search' ); ?></button>
             <button type="button" id="cancel-preview-button" class="button button-secondary"><?php esc_html_e( 'Cancel / Upload New File', 'chicago-loft-search' ); ?></button>
         </p>
     </div>

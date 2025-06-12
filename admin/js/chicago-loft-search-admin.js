@@ -300,11 +300,11 @@
             });
             
             // Handle import button click (now with batching)
-            $(document).on('click', '#confirm-import-btn', function(e) {
+            // Ensuring this selector matches the button ID in import-page.php
+            $(document).on('click', '#confirm-import-btn', function(e) { 
                 e.preventDefault();
                 
                 if (!window.csvRawData || window.csvRawData.length === 0) {
-                    // Ensure .import-status exists or is created if buildPreviewTable didn't run
                     if ($('.import-status').length === 0) {
                         $('.csv-preview-container').append('<div class="import-status" style="margin-top: 20px;"></div>');
                     }
@@ -315,15 +315,13 @@
                 const $button = $(this);
                 const originalButtonText = $button.text();
                 $button.prop('disabled', true).text('Importing...');
-                // Disable other buttons in the preview actions
                 $('.csv-preview-container .preview-actions .button').not($button).prop('disabled', true);
 
 
                 const $importStatusDiv = $('.import-status');
-                // Clear previous import status and prepare new structure
                 $importStatusDiv.html(
                     '<div class="import-progress-summary"></div>' +
-                    '<div class="import-progress-bar-container" style="width: 100%; background-color: #f3f3f3; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; overflow: hidden;">' + // Added overflow:hidden
+                    '<div class="import-progress-bar-container" style="width: 100%; background-color: #f3f3f3; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; overflow: hidden;">' +
                         '<div class="import-progress-bar" style="width: 0%; height: 24px; background-color: #4CAF50; text-align: center; line-height: 24px; color: white; border-radius: 4px; transition: width 0.2s ease-in-out;">0%</div>' +
                     '</div>' +
                     '<ul class="import-results-log" style="max-height: 200px; overflow-y: auto; border: 1px solid #eee; padding: 10px; margin-top:10px; background:#f9f9f9;"></ul>' +
@@ -337,10 +335,8 @@
                 $progressSummary.html('<p>Preparing import...</p>');
                 
                 const allDataToImport = [];
-                // Collect data, including any edits from the preview table
                 $('.preview-row').each(function(index) {
-                    const rowData = JSON.parse(JSON.stringify(window.csvRawData[index])); // Deep clone to avoid modifying global
-                    
+                    const rowData = JSON.parse(JSON.stringify(window.csvRawData[index])); 
                     $(this).find('input[type="text"], textarea').each(function() {
                         const fieldName = $(this).data('field');
                         if (fieldName && rowData && rowData.preview_item_for_js) {
@@ -403,17 +399,16 @@
                             $resultsLog.prepend('<li class="error">AJAX Error for batch (Records ' + (currentRecordIndex + 1) + '-' + currentBatchEndIndex + '). Server said: ' + (xhr.statusText || 'No response') + '</li>');
                         },
                         complete: function() {
-                            currentRecordIndex += batch.length; // Use actual batch length processed
+                            currentRecordIndex += batch.length; 
                             let finalProgressPercent = Math.round((currentRecordIndex / totalRecords) * 100);
                             $progressBar.css('width', finalProgressPercent + '%').text(finalProgressPercent + '%');
                             importNextBatch();
                         }
                     });
                 }
-                importNextBatch(); // Start the first batch
+                importNextBatch(); 
             });
             
-            // Delegated event for reload page button
             $(document).on('click', '.import-final-actions .button.reload-page, .import-status .reload-page', function() {
                 window.location.href = 'admin.php?page=chicago-loft-search-listings';
             });
@@ -431,7 +426,7 @@
             const allKeys = new Set();
             previewData.forEach(item => { 
                 Object.keys(item).forEach(key => {
-                    if (key !== 'listing_type' && key !== 'original_csv_data' && key !== 'preview_item_for_js') { // Filter out structural keys
+                    if (key !== 'listing_type' && key !== 'original_csv_data' && key !== 'preview_item_for_js') { 
                         allKeys.add(key);
                     }
                 });
@@ -480,10 +475,10 @@
                 tableHtml += '</tr>';
             });
             
-            tableHtml += '</tbody></table></div>'; // Close wrapper and table
+            tableHtml += '</tbody></table></div>'; 
             
             tableHtml += '<div class="preview-actions" style="margin-top: 20px; padding-top:15px; border-top:1px solid #ddd;">';
-            tableHtml += '<button id="confirm-import-btn" class="button button-primary">Confirm and Start Import</button>';
+            tableHtml += '<button id="confirm-import-btn" class="button button-primary">Confirm and Start Import</button>'; // This ID should match the event handler
             tableHtml += ' <a href="' + window.location.pathname + '?page=' + new URLSearchParams(window.location.search).get('page') + '" class="button">Cancel / Upload New File</a>';
             tableHtml += '</div>';
             
